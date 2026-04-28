@@ -2,14 +2,12 @@ from io import BytesIO
 import pandas as pd
 
 
-IMPORT_COLUMNS = [
+REQUIRED_COLUMNS = [
     "recept_code",
     "recept_naam",
     "categorie",
     "handeling_code",
     "handeling_naam",
-    "dag_offset",
-    "volgorde_handeling",
     "post",
     "toestel",
     "passieve_tijd",
@@ -17,6 +15,12 @@ IMPORT_COLUMNS = [
     "stap_naam",
     "stap_tijd",
 ]
+
+OPTIONAL_DEFAULTS = {
+    "dag_offset": 0,
+    "volgorde_handeling": None,
+    "is_vaste_taak": 0,
+}
 
 
 def clean_text(value, default=""):
@@ -56,9 +60,13 @@ def import_excel_to_database(conn, file_bytes: bytes):
     df = pd.read_excel(BytesIO(file_bytes))
     df.columns = [str(c).strip() for c in df.columns]
 
-    missing = [c for c in IMPORT_COLUMNS if c not in df.columns]
+    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
         raise ValueError(f"Ontbrekende kolommen: {', '.join(missing)}")
+
+    for column, default_value in OPTIONAL_DEFAULTS.items():
+        if column not in df.columns:
+            df[column] = default_value
 
     imported_recepten = 0
     imported_handelingen = 0
@@ -66,6 +74,7 @@ def import_excel_to_database(conn, file_bytes: bytes):
 
     seen_recepten = set()
     seen_handelingen = set()
+    handeling_sort_orders = {}
 
     for idx, row in df.iterrows():
         recept_code = clean_text(row["recept_code"])
@@ -73,20 +82,31 @@ def import_excel_to_database(conn, file_bytes: bytes):
         categorie = clean_text(row["categorie"])
         handeling_code = clean_text(row["handeling_code"])
         handeling_naam = clean_text(row["handeling_naam"])
+
+        if not recept_code or not recept_naam or not handeling_code or not handeling_naam:
+            continue
+
         dag_offset = safe_int(row["dag_offset"], 0)
-        volgorde_handeling = safe_int(row["volgorde_handeling"], 0)
+
+        sort_key = (recept_code, handeling_code)
+        if sort_key not in handeling_sort_orders:
+            handeling_sort_orders[sort_key] = len(
+                [key for key in handeling_sort_orders if key[0] == recept_code]
+            ) + 1
+
+        volgorde_handeling = safe_int(
+            row["volgorde_handeling"],
+            handeling_sort_orders[sort_key],
+        )
+
         post = normalize_post(row["post"])
         toestel = normalize_toestel(row["toestel"])
         passieve_tijd = safe_int(row["passieve_tijd"], 0)
         stap_volgorde = safe_int(row["stap_volgorde"], 0)
         stap_naam = clean_text(row["stap_naam"])
         stap_tijd = safe_int(row["stap_tijd"], 0)
-        is_vaste_taak = safe_int(row["is_vaste_taak"], 0) if "is_vaste_taak" in df.columns else 0
+        is_vaste_taak = safe_int(row["is_vaste_taak"], 0)
 
-        if not recept_code or not recept_naam or not handeling_naam:
-            continue
-
-        # --- recept ---
         row_db = conn.execute(
             "SELECT id FROM recepten WHERE code=?",
             (recept_code,),
@@ -107,7 +127,6 @@ def import_excel_to_database(conn, file_bytes: bytes):
             imported_recepten += 1
             seen_recepten.add(recept_code)
 
-        # --- handeling ---
         row_db = conn.execute(
             "SELECT id FROM handelingen WHERE recept_id=? AND code=?",
             (recept_id, handeling_code),
@@ -155,13 +174,12 @@ def import_excel_to_database(conn, file_bytes: bytes):
             )
             conn.commit()
             handeling_id = cur.lastrowid
-            
+
         key = (recept_id, handeling_code)
         if key not in seen_handelingen:
             imported_handelingen += 1
             seen_handelingen.add(key)
 
-        # --- stap ---
         if stap_naam:
             conn.execute(
                 """
