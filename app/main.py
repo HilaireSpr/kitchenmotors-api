@@ -24,3 +24,13 @@ app.include_router(api_router, prefix="/api/v1")
 @app.get("/")
 def root():
     return {"name": settings.app_name, "status": "ok"}
+
+@app.get("/debug-routes")
+def debug_routes():
+    return [
+        {
+            "path": route.path,
+            "name": route.name,
+        }
+        for route in app.routes
+    ]

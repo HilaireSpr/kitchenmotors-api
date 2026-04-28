@@ -1,5 +1,6 @@
 import pandas as pd
 from datetime import datetime
+from io import StringIO
 
 
 def init_planning_storage(conn):
@@ -268,8 +269,8 @@ def load_planning_df(conn, planning_run_id: int | None = None) -> pd.DataFrame:
     if not row or not row["data"]:
         return pd.DataFrame()
 
-    df = pd.read_json(row["data"])
-
+    df = pd.read_json(StringIO(row["data"]))
+    
     if "Start" in df.columns:
         df["Start"] = pd.to_datetime(df["Start"], errors="coerce")
     if "Einde" in df.columns:
