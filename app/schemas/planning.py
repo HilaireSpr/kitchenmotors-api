@@ -2,7 +2,6 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-
 class PlanningOverride(BaseModel):
     planningId: str
     locked: bool = True
@@ -21,7 +20,9 @@ class MenuRotationContext(BaseModel):
 class PlanningRequest(BaseModel):
     start_monday: str
     start_week: int
-    cycles: int
+    cycles: int = 1
+    end_date: Optional[str] = None
+    planning_naam: Optional[str] = None
     explain: bool = False
     overrides: list[PlanningOverride] = Field(default_factory=list)
     menu_rotation: Optional[MenuRotationContext] = None
