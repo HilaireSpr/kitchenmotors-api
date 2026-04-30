@@ -1,4 +1,5 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+import json
 
 from app.db import get_db_connection
 from app.schemas.planning import (
@@ -18,8 +19,64 @@ from app.services.planner_service import (
     reorder_planning_task,
 )
 
+from app.services.planning_storage import (
+    get_planning_runs,
+    load_planning_df,
+    set_active_planning_run,
+)
+
 router = APIRouter()
 
+@router.get("/runs")
+def get_planning_runs_endpoint():
+    conn = get_db_connection()
+    try:
+        rows = get_planning_runs(conn)
+
+        return {
+            "success": True,
+            "result": [
+                {
+                    "id": row["id"],
+                    "naam": row["naam"],
+                    "beschrijving": row["beschrijving"],
+                    "aangemaakt_op": row["aangemaakt_op"],
+                    "laatst_gebruikt_op": row["laatst_gebruikt_op"],
+                    "actief": bool(row["actief"]),
+                }
+                for row in rows
+            ],
+        }
+    finally:
+        conn.close()
+
+
+@router.get("/runs/{planning_run_id}")
+def get_planning_run_rows_endpoint(planning_run_id: int):
+    conn = get_db_connection()
+    try:
+        set_active_planning_run(conn, planning_run_id)
+
+        df = load_planning_df(conn, planning_run_id)
+
+        if df is None or df.empty:
+            return {
+                "success": True,
+                "result": {
+                    "rows": [],
+                },
+            }
+
+        json_data = df.to_json(orient="records", date_format="iso")
+
+        return {
+            "success": True,
+            "result": {
+                "rows": json.loads(json_data),
+            },
+        }
+    finally:
+        conn.close()
 
 @router.post("/run")
 def run_planning_endpoint(payload: PlanningRequest):
