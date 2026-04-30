@@ -47,6 +47,8 @@ def update_handeling_endpoint(handeling_id: int, payload: HandelingUpdateRequest
             post=payload.post,
             toestel=payload.toestel,
             dag_offset=payload.dag_offset,
+            dag_offset_min=payload.min_offset_dagen,
+            dag_offset_max=payload.max_offset_dagen,
             passieve_tijd=payload.passieve_tijd,
             is_vaste_taak=payload.is_vaste_taak,
         )

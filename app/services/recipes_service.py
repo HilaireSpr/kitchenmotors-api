@@ -32,6 +32,16 @@ def _normalize_optional_text(value) -> str | None:
     return value or None
 
 
+def _to_int(value, fallback=0) -> int:
+    if value is None or value == "":
+        return fallback
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
 def get_recipes(conn) -> list[dict]:
     rows = conn.execute(
         """
@@ -82,6 +92,8 @@ def get_recipe_detail(conn, recept_code: str) -> dict | None:
             code,
             naam,
             dag_offset,
+            min_offset_dagen,
+            max_offset_dagen,
             sort_order,
             post,
             toestel,
@@ -139,6 +151,10 @@ def get_recipe_detail(conn, recept_code: str) -> dict | None:
         actieve_tijd = sum(int(step["stap_tijd"] or 0) for step in stappen)
         passieve_tijd = int(row["passieve_tijd"] or 0)
 
+        dag_offset = _to_int(row["dag_offset"], 0)
+        dag_offset_min = _to_int(row["min_offset_dagen"], dag_offset)
+        dag_offset_max = _to_int(row["max_offset_dagen"], dag_offset)
+
         handelingen.append(
             {
                 "handeling_id": handeling_id,
@@ -148,9 +164,9 @@ def get_recipe_detail(conn, recept_code: str) -> dict | None:
                 "volgorde_handeling": row["sort_order"],
                 "post": row["post"],
                 "toestel": row["toestel"],
-                "dag_offset": row["dag_offset"],
-                "dag_offset_min": row["dag_offset"],
-                "dag_offset_max": row["dag_offset"],
+                "dag_offset": dag_offset,
+                "dag_offset_min": dag_offset_min,
+                "dag_offset_max": dag_offset_max,
                 "passieve_tijd": passieve_tijd,
                 "actieve_tijd": actieve_tijd,
                 "totale_duur": actieve_tijd + passieve_tijd,
@@ -173,11 +189,13 @@ def get_recipe_detail(conn, recept_code: str) -> dict | None:
 
 def update_handeling(
     conn,
-    handeling_id,
-    naam,
+    handeling_id: int,
+    naam: str,
     post,
     toestel,
     dag_offset,
+    dag_offset_min,
+    dag_offset_max,
     passieve_tijd,
     is_vaste_taak,
     planning_type=None,
@@ -187,19 +205,7 @@ def update_handeling(
     existing = conn.execute(
         """
         SELECT
-            id,
-            recept_id,
-            code,
-            naam,
-            dag_offset,
-            sort_order,
-            post,
-            toestel,
-            passieve_tijd,
-            is_vaste_taak,
-            planning_type,
-            actief_vanaf,
-            actief_tot
+            id
         FROM handelingen
         WHERE id = ?
         """,
@@ -214,11 +220,19 @@ def update_handeling(
     normalized_planning_type = _normalize_planning_type(planning_type)
 
     normalized_actief_vanaf = (
-        actief_vanaf.isoformat() if hasattr(actief_vanaf, "isoformat") else _normalize_optional_text(actief_vanaf)
+        actief_vanaf.isoformat()
+        if hasattr(actief_vanaf, "isoformat")
+        else _normalize_optional_text(actief_vanaf)
     )
     normalized_actief_tot = (
-        actief_tot.isoformat() if hasattr(actief_tot, "isoformat") else _normalize_optional_text(actief_tot)
+        actief_tot.isoformat()
+        if hasattr(actief_tot, "isoformat")
+        else _normalize_optional_text(actief_tot)
     )
+
+    dag_offset_value = _to_int(dag_offset, 0)
+    dag_offset_min_value = _to_int(dag_offset_min, dag_offset_value)
+    dag_offset_max_value = _to_int(dag_offset_max, dag_offset_value)
 
     conn.execute(
         """
@@ -228,6 +242,8 @@ def update_handeling(
             post = ?,
             toestel = ?,
             dag_offset = ?,
+            min_offset_dagen = ?,
+            max_offset_dagen = ?,
             passieve_tijd = ?,
             is_vaste_taak = ?,
             planning_type = ?,
@@ -239,8 +255,10 @@ def update_handeling(
             naam.strip(),
             normalized_post,
             normalized_toestel,
-            int(dag_offset),
-            int(passieve_tijd or 0),
+            dag_offset_value,
+            dag_offset_min_value,
+            dag_offset_max_value,
+            _to_int(passieve_tijd, 0),
             1 if is_vaste_taak else 0,
             normalized_planning_type,
             normalized_actief_vanaf,
@@ -257,6 +275,8 @@ def update_handeling(
             code,
             naam,
             dag_offset,
+            min_offset_dagen,
+            max_offset_dagen,
             sort_order,
             post,
             toestel,
@@ -271,6 +291,10 @@ def update_handeling(
         (handeling_id,),
     ).fetchone()
 
+    dag_offset_value = _to_int(updated["dag_offset"], 0)
+    dag_offset_min_value = _to_int(updated["min_offset_dagen"], dag_offset_value)
+    dag_offset_max_value = _to_int(updated["max_offset_dagen"], dag_offset_value)
+
     return {
         "handeling_id": updated["id"],
         "handeling_code": updated["code"],
@@ -279,9 +303,9 @@ def update_handeling(
         "volgorde_handeling": updated["sort_order"],
         "post": updated["post"],
         "toestel": updated["toestel"],
-        "dag_offset": updated["dag_offset"],
-        "dag_offset_min": updated["dag_offset"],
-        "dag_offset_max": updated["dag_offset"],
+        "dag_offset": dag_offset_value,
+        "dag_offset_min": dag_offset_min_value,
+        "dag_offset_max": dag_offset_max_value,
         "passieve_tijd": updated["passieve_tijd"],
         "is_vaste_taak": bool(updated["is_vaste_taak"]),
         "planning_type": _normalize_planning_type(updated["planning_type"]),
