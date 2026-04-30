@@ -5,6 +5,7 @@ from app.schemas.menu import (
     MenuGenerateRequest,
     MenuItemCreateRequest,
     MenuItemDeleteRequest,
+    MenuItemUpdateRequest,
     MenuOverrideRequest,
     MenuReplaceOverrideRequest,
     MenuSelectionRequest,
@@ -18,6 +19,7 @@ from app.services.menu_service import (
     get_recept_selectie,
     replace_menu_override,
     save_recept_selectie,
+    update_menu_item,
 )
 
 router = APIRouter()
@@ -127,6 +129,30 @@ def replace_menu_override_endpoint(payload: MenuReplaceOverrideRequest):
             override_reason=payload.override_reason,
         )
         return {"success": True, "result": result}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        conn.close()
+
+@router.put("/items/{menu_item_id}")
+def update_menu_item_endpoint(menu_item_id: int, payload: MenuItemUpdateRequest):
+    conn = get_db_connection()
+    try:
+        update_menu_item(
+            conn=conn,
+            menu_item_id=menu_item_id,
+            serveerdag=payload.serveerdag,
+            cyclus_week=payload.cyclus_week,
+            cyclus_dag=payload.cyclus_dag,
+            menu_groep=payload.menu_groep,
+            ritme_type=payload.ritme_type,
+            ritme_interval_weken=payload.ritme_interval_weken,
+            prognose_aantal=payload.prognose_aantal,
+            periode_naam=payload.periode_naam,
+            is_exception=payload.is_exception,
+            opmerking=payload.opmerking,
+        )
+        return {"success": True, "result": {"id": menu_item_id}}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     finally:

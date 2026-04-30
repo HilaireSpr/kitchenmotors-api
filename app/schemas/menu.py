@@ -25,6 +25,17 @@ class MenuItemCreateRequest(BaseModel):
     is_exception: int | None = 0
     opmerking: str | None = None
 
+class MenuItemUpdateRequest(BaseModel):
+    serveerdag: str
+    cyclus_week: int | None = None
+    cyclus_dag: int | None = None
+    menu_groep: str | None = None
+    ritme_type: str | None = None
+    ritme_interval_weken: int | None = None
+    prognose_aantal: float | None = None
+    periode_naam: str | None = None
+    is_exception: int | None = 0
+    opmerking: str | None = None
 
 class MenuItemDeleteRequest(BaseModel):
     menu_item_id: int

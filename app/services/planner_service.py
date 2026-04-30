@@ -12,6 +12,7 @@ from app.services.planning import (
 )
 from app.services.planning_overrides import set_task_move_after
 from app.services.planning_overrides import apply_planning_overrides
+from app.services.planning_storage import create_planning_run, save_planning_df
 
 # =========================================================
 # SAMENVATTINGEN / ANALYSE
@@ -364,6 +365,23 @@ def run_planner(payload) -> dict:
         planning_df = planning_df.where(pd.notna(planning_df), None)
 
         rows = planning_df.to_dict(orient="records")
+        
+        planning_naam = getattr(payload, "planning_naam", None)
+
+        if planning_naam:
+            planning_run_id = create_planning_run(
+                conn,
+                naam=planning_naam,
+                beschrijving=f"Menu-groep: {menu_groep or 'alle'} | Start: {payload.start_monday} | Cycli: {payload.cycles}",
+            )
+
+            save_planning_df(
+                conn,
+                planning_df,
+                planning_run_id=planning_run_id,
+            )
+        else:
+            planning_run_id = None
 
         debug_menu_rotation = None
         if menu_rotation:
@@ -374,6 +392,8 @@ def run_planner(payload) -> dict:
             }
 
         return {
+            "planning_run_id": planning_run_id,
+            "planning_naam": planning_naam,
             "rows": rows,
             "row_count": len(rows),
             "capacity_summary": capacity_summary,

@@ -378,6 +378,67 @@ def create_menu_override(
     conn.commit()
     return cur.lastrowid
 
+def update_menu_item(
+    conn,
+    menu_item_id: int,
+    serveerdag: str,
+    cyclus_week: int | None = None,
+    cyclus_dag: int | None = None,
+    menu_groep: str | None = None,
+    ritme_type: str | None = None,
+    ritme_interval_weken: int | None = None,
+    prognose_aantal: float | None = None,
+    periode_naam: str | None = None,
+    is_exception: int | None = 0,
+    opmerking: str | None = None,
+):
+    existing = conn.execute(
+        """
+        SELECT id
+        FROM menu
+        WHERE id = ?
+          AND COALESCE(status, 'active') = 'active'
+        """,
+        (menu_item_id,),
+    ).fetchone()
+
+    if not existing:
+        raise ValueError(f"Menu-item met id {menu_item_id} niet gevonden")
+
+    conn.execute(
+        """
+        UPDATE menu
+        SET
+            serveerdag = ?,
+            cyclus_week = ?,
+            cyclus_dag = ?,
+            menu_groep = ?,
+            ritme_type = ?,
+            ritme_interval_weken = ?,
+            prognose_aantal = ?,
+            periode_naam = ?,
+            is_exception = ?,
+            opmerking = ?
+        WHERE id = ?
+        """,
+        (
+            serveerdag,
+            cyclus_week,
+            cyclus_dag,
+            menu_groep,
+            ritme_type,
+            ritme_interval_weken,
+            prognose_aantal,
+            periode_naam,
+            int(is_exception or 0),
+            opmerking,
+            menu_item_id,
+        ),
+    )
+
+    conn.commit()
+
+    return menu_item_id
 
 def delete_menu_item(conn, menu_item_id: int):
     conn.execute("DELETE FROM menu WHERE id = ?", (menu_item_id,))
