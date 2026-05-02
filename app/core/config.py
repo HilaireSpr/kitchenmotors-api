@@ -10,6 +10,7 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "https://kitchenmotors-web.vercel.app",
+        "https://app.kitchenmotors.be",
     ]
 
     model_config = SettingsConfigDict(
