@@ -198,3 +198,19 @@ def cleanup_handelingen():
         return {"success": True, "message": "Cleanup uitgevoerd"}
     finally:
         conn.close()
+
+@router.post("/admin/reset-recipes")
+def reset_recipes():
+    conn = get_db_connection()
+    try:
+        conn.execute("DELETE FROM stappen")
+        conn.execute("DELETE FROM handelingen")
+        conn.execute("DELETE FROM recepten")
+        conn.commit()
+
+        return {
+            "success": True,
+            "message": "Alle recepten, handelingen en stappen zijn verwijderd",
+        }
+    finally:
+        conn.close()
