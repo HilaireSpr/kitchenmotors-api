@@ -488,7 +488,9 @@ def apply_planning_overrides(conn, planning_df: pd.DataFrame, planning_run_id=No
         result["post_override"].astype(str).str.strip() != ""
     )
     if has_post_override.any():
-        result.loc[has_post_override, "Post"] = result.loc[has_post_override, "post_override"]
+        result.loc[has_post_override, "Post"] = result.loc[
+            has_post_override, "post_override"
+        ]
 
     has_toestel_override = result["toestel_override"].notna() & (
         result["toestel_override"].astype(str).str.strip() != ""
@@ -516,6 +518,35 @@ def apply_planning_overrides(conn, planning_df: pd.DataFrame, planning_run_id=No
 
     for _, group in result.groupby(["Werkdag_iso", "Post"], sort=False):
         group = group.copy().reset_index(drop=True)
+
+        has_reorder_in_group = (
+            (
+                group["move_before_planning_id"].notna()
+                & (group["move_before_planning_id"].astype(str).str.strip() != "")
+            )
+            | (
+                group["move_after_planning_id"].notna()
+                & (group["move_after_planning_id"].astype(str).str.strip() != "")
+            )
+        ).any()
+
+        if has_reorder_in_group:
+            cursor = group["Start"].min()
+
+            for i in range(len(group)):
+                is_locked = bool(group.at[i, "Locked"])
+
+                if is_locked:
+                    cursor = max(cursor, group.at[i, "Einde"])
+                    continue
+
+                old_start = group.at[i, "Start"]
+                old_end = group.at[i, "Einde"]
+                duration = old_end - old_start
+
+                group.at[i, "Start"] = cursor
+                group.at[i, "Einde"] = cursor + duration
+                cursor = group.at[i, "Einde"]
 
         domino_running = 0
         manual_shift_seen = False
@@ -554,8 +585,14 @@ def apply_planning_overrides(conn, planning_df: pd.DataFrame, planning_run_id=No
         result["toestel_override"].astype(str).str.strip() != ""
     )
     final_has_reorder = (
-        (result["move_before_planning_id"].notna() & (result["move_before_planning_id"].astype(str).str.strip() != ""))
-        | (result["move_after_planning_id"].notna() & (result["move_after_planning_id"].astype(str).str.strip() != ""))
+        (
+            result["move_before_planning_id"].notna()
+            & (result["move_before_planning_id"].astype(str).str.strip() != "")
+        )
+        | (
+            result["move_after_planning_id"].notna()
+            & (result["move_after_planning_id"].astype(str).str.strip() != "")
+        )
     )
 
     result["Manueel aangepast"] = (
@@ -577,6 +614,7 @@ def apply_planning_overrides(conn, planning_df: pd.DataFrame, planning_run_id=No
         "move_after_planning_id",
         "updated_at",
     ]
+
     result = result.drop(columns=[c for c in drop_cols if c in result.columns])
 
     return result

@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException
 import json
+
+from fastapi import APIRouter
 
 from app.db import get_db_connection
 from app.schemas.planning import (
@@ -18,7 +19,10 @@ from app.services.planner_service import (
     reset_planning_override,
     reorder_planning_task,
 )
-
+from app.services.planning_overrides import (
+    clear_task_override,
+    set_task_lock,
+)
 from app.services.planning_storage import (
     get_planning_runs,
     load_planning_df,
@@ -26,6 +30,7 @@ from app.services.planning_storage import (
 )
 
 router = APIRouter()
+
 
 @router.get("/runs")
 def get_planning_runs_endpoint():
@@ -62,21 +67,18 @@ def get_planning_run_rows_endpoint(planning_run_id: int):
         if df is None or df.empty:
             return {
                 "success": True,
-                "result": {
-                    "rows": [],
-                },
+                "result": {"rows": []},
             }
 
         json_data = df.to_json(orient="records", date_format="iso")
 
         return {
             "success": True,
-            "result": {
-                "rows": json.loads(json_data),
-            },
+            "result": {"rows": json.loads(json_data)},
         }
     finally:
         conn.close()
+
 
 @router.post("/run")
 def run_planning_endpoint(payload: PlanningRequest):
@@ -86,6 +88,7 @@ def run_planning_endpoint(payload: PlanningRequest):
         "success": True,
         "result": result,
     }
+
 
 @router.post("/override/move")
 def move_planning_task_endpoint(payload: PlanningMoveOverrideRequest):
@@ -100,6 +103,7 @@ def move_planning_task_endpoint(payload: PlanningMoveOverrideRequest):
     finally:
         conn.close()
 
+
 @router.post("/override/post")
 def override_planning_post_endpoint(payload: PlanningPostOverrideRequest):
     conn = get_db_connection()
@@ -112,6 +116,7 @@ def override_planning_post_endpoint(payload: PlanningPostOverrideRequest):
         return {"success": True, "result": result}
     finally:
         conn.close()
+
 
 @router.post("/lock")
 def lock_planning_task_endpoint(payload: PlanningLockRequest):
@@ -126,6 +131,7 @@ def lock_planning_task_endpoint(payload: PlanningLockRequest):
     finally:
         conn.close()
 
+
 @router.post("/reset")
 def reset_planning_override_endpoint(payload: PlanningResetRequest):
     conn = get_db_connection()
@@ -138,20 +144,6 @@ def reset_planning_override_endpoint(payload: PlanningResetRequest):
     finally:
         conn.close()
 
-@router.post("/override/reorder")
-def reorder_planning(request: PlanningReorderRequest):
-    try:
-        from app.services.planning_overrides import set_reorder_override
-
-        set_reorder_override(
-            planning_id=request.planning_id,
-            move_after_planning_id=request.move_after_planning_id,
-        )
-
-        return {"success": True}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/override/reorder")
 def reorder_planning_task_endpoint(payload: PlanningReorderRequest):
@@ -166,6 +158,7 @@ def reorder_planning_task_endpoint(payload: PlanningReorderRequest):
     finally:
         conn.close()
 
+
 @router.post("/set-lock")
 def set_lock(payload: dict):
     conn = get_db_connection()
@@ -178,6 +171,7 @@ def set_lock(payload: dict):
         return {"success": True}
     finally:
         conn.close()
+
 
 @router.post("/clear-override")
 def clear_override(payload: dict):
