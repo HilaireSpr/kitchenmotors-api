@@ -184,3 +184,17 @@ def clear_override(payload: dict):
         return {"success": True}
     finally:
         conn.close()
+
+@router.post("/admin/cleanup-handelingen")
+def cleanup_handelingen():
+    conn = get_db_connection()
+    try:
+        conn.execute("""
+        DELETE FROM handelingen
+        WHERE code NOT LIKE '%_[0-9]'
+        """)
+        conn.commit()
+
+        return {"success": True, "message": "Cleanup uitgevoerd"}
+    finally:
+        conn.close()
