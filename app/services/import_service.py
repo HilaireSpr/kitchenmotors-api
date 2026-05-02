@@ -1,5 +1,4 @@
 from io import BytesIO
-import re
 
 import pandas as pd
 
@@ -14,6 +13,7 @@ REQUIRED_COLUMNS = [
 
 OPTIONAL_DEFAULTS = {
     "categorie": "",
+    "subgroep_code": "",
     "dag_offset": 0,
     "volgorde_handeling": None,
     "post": "-",
@@ -62,19 +62,31 @@ def normalize_toestel(value):
     return value
 
 
-def is_valid_handeling_code(recept_code: str, handeling_code: str) -> bool:
+def get_parent_handeling_code(recept_code: str, subgroep_code: str) -> str:
     """
-    Geldige handeling-code moet eindigen op _nummer.
+    Parent-code die soms foutief als handeling ontstond.
 
-    Voorbeelden:
-    PAZO_1_ZE_1 = geldig
-    PAZO_1_ZE = ongeldig
+    Voorbeeld:
+    recept_code = PAZO_1
+    subgroep_code = ZE
+    parent = PAZO_1_ZE
+
+    Die parent-code mag NIET als aparte handeling geïmporteerd worden.
+    Echte handeling-codes zoals PAZO_1_ZE_1, PAZO_3_ZE_A1, GG10_1, SR15_10,
+    FB... blijven wél geldig.
     """
-    if not recept_code or not handeling_code:
-        return False
+    recept_code = clean_text(recept_code)
+    subgroep_code = clean_text(subgroep_code)
 
-    pattern = rf"^{re.escape(recept_code)}_.+_\d+$"
-    return re.match(pattern, handeling_code) is not None
+    if not recept_code or not subgroep_code:
+        return ""
+
+    return f"{recept_code}_{subgroep_code}"
+
+
+def is_parent_handeling_code(recept_code: str, subgroep_code: str, handeling_code: str) -> bool:
+    parent_code = get_parent_handeling_code(recept_code, subgroep_code)
+    return bool(parent_code and clean_text(handeling_code) == parent_code)
 
 
 def ensure_columns(df: pd.DataFrame):
@@ -117,14 +129,24 @@ def get_auto_stap_order(stap_sort_orders, recept_code, handeling_code):
     return stap_sort_orders[key]
 
 
-def cleanup_invalid_handelingen(conn, recept_id: int):
+def cleanup_parent_handeling(conn, recept_id: int, parent_code: str):
+    """
+    Verwijdert enkel de foutieve parent-code voor dit recept.
+    Verwijdert dus NIET langer codes die niet op _nummer eindigen, want codes zoals
+    PAZO_3_ZE_A1, GG10_1, SR15_10 en FB... zijn geldig.
+    """
+    parent_code = clean_text(parent_code)
+
+    if not parent_code:
+        return
+
     conn.execute(
         """
         DELETE FROM handelingen
         WHERE recept_id = ?
-          AND code NOT GLOB '*_[0-9]'
+          AND code = ?
         """,
-        (recept_id,),
+        (recept_id, parent_code),
     )
     conn.commit()
 
@@ -148,6 +170,9 @@ def import_excel_to_database(conn, file_bytes: bytes):
     for _, row in df.iterrows():
         recept_code = clean_text(row["recept_code"])
         recept_naam = clean_text(row["recept_naam"])
+        categorie = clean_text(row["categorie"])
+        subgroep_code = clean_text(row["subgroep_code"])
+
         handeling_code = clean_text(row["handeling_code"])
         handeling_naam = clean_text(row["handeling_naam"])
         stap_naam = clean_text(row["stap_naam"])
@@ -156,11 +181,12 @@ def import_excel_to_database(conn, file_bytes: bytes):
             skipped_rows += 1
             continue
 
-        if not is_valid_handeling_code(recept_code, handeling_code):
+        parent_code = get_parent_handeling_code(recept_code, subgroep_code)
+
+        if is_parent_handeling_code(recept_code, subgroep_code, handeling_code):
             skipped_rows += 1
             continue
 
-        categorie = clean_text(row["categorie"])
         dag_offset = safe_int(row["dag_offset"], 0)
 
         auto_handeling_order = get_auto_handeling_order(
@@ -199,6 +225,16 @@ def import_excel_to_database(conn, file_bytes: bytes):
 
         if row_db:
             recept_id = row_db["id"]
+            conn.execute(
+                """
+                UPDATE recepten
+                SET naam = ?,
+                    categorie = ?
+                WHERE id = ?
+                """,
+                (recept_naam, categorie, recept_id),
+            )
+            conn.commit()
         else:
             cur = conn.cursor()
             cur.execute(
@@ -211,7 +247,7 @@ def import_excel_to_database(conn, file_bytes: bytes):
             conn.commit()
             recept_id = cur.lastrowid
 
-        cleanup_invalid_handelingen(conn, recept_id)
+        cleanup_parent_handeling(conn, recept_id, parent_code)
 
         if recept_code not in seen_recepten:
             imported_recepten += 1
