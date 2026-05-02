@@ -1,4 +1,6 @@
 from io import BytesIO
+import re
+
 import pandas as pd
 
 
@@ -60,6 +62,21 @@ def normalize_toestel(value):
     return value
 
 
+def is_valid_handeling_code(recept_code: str, handeling_code: str) -> bool:
+    """
+    Geldige handeling-code moet eindigen op _nummer.
+
+    Voorbeelden:
+    PAZO_1_ZE_1 = geldig
+    PAZO_1_ZE = ongeldig
+    """
+    if not recept_code or not handeling_code:
+        return False
+
+    pattern = rf"^{re.escape(recept_code)}_.+_\d+$"
+    return re.match(pattern, handeling_code) is not None
+
+
 def ensure_columns(df: pd.DataFrame):
     missing_required = [c for c in REQUIRED_COLUMNS if c not in df.columns]
 
@@ -100,6 +117,18 @@ def get_auto_stap_order(stap_sort_orders, recept_code, handeling_code):
     return stap_sort_orders[key]
 
 
+def cleanup_invalid_handelingen(conn, recept_id: int):
+    conn.execute(
+        """
+        DELETE FROM handelingen
+        WHERE recept_id = ?
+          AND code NOT GLOB '*_[0-9]'
+        """,
+        (recept_id,),
+    )
+    conn.commit()
+
+
 def import_excel_to_database(conn, file_bytes: bytes):
     df = pd.read_excel(BytesIO(file_bytes))
     df.columns = [str(c).strip() for c in df.columns]
@@ -124,6 +153,10 @@ def import_excel_to_database(conn, file_bytes: bytes):
         stap_naam = clean_text(row["stap_naam"])
 
         if not recept_code or not recept_naam or not handeling_code or not handeling_naam:
+            skipped_rows += 1
+            continue
+
+        if not is_valid_handeling_code(recept_code, handeling_code):
             skipped_rows += 1
             continue
 
@@ -177,6 +210,8 @@ def import_excel_to_database(conn, file_bytes: bytes):
             )
             conn.commit()
             recept_id = cur.lastrowid
+
+        cleanup_invalid_handelingen(conn, recept_id)
 
         if recept_code not in seen_recepten:
             imported_recepten += 1
