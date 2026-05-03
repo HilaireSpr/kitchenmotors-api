@@ -77,3 +77,59 @@ def update_stap_endpoint(stap_id: int, payload: StapUpdateRequest):
         return {"success": True, "result": result}
     finally:
         conn.close()
+
+@router.delete("/{recept_id}")
+def delete_recipe_endpoint(recept_id: int):
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            "SELECT id, naam FROM recepten WHERE id = ?",
+            (recept_id,),
+        ).fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Recept niet gevonden")
+
+        conn.execute(
+            """
+            DELETE FROM stappen
+            WHERE handeling_id IN (
+                SELECT id FROM handelingen WHERE recept_id = ?
+            )
+            """,
+            (recept_id,),
+        )
+
+        conn.execute(
+            "DELETE FROM handelingen WHERE recept_id = ?",
+            (recept_id,),
+        )
+
+        conn.execute(
+            "DELETE FROM menu WHERE recept_id = ?",
+            (recept_id,),
+        )
+
+        conn.execute(
+            "DELETE FROM menu_recept_selectie WHERE recept_id = ?",
+            (recept_id,),
+        )
+
+        conn.execute(
+            "DELETE FROM planning_templates WHERE recept_id = ?",
+            (recept_id,),
+        )
+
+        conn.execute(
+            "DELETE FROM recepten WHERE id = ?",
+            (recept_id,),
+        )
+
+        conn.commit()
+
+        return {
+            "success": True,
+            "message": "Recept verwijderd",
+        }
+    finally:
+        conn.close()
