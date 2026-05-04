@@ -273,8 +273,8 @@ def import_excel_to_database(
                 )
 
                 conn.execute(
-                    "DELETE FROM recepten WHERE id = ?",
-                    (recept_id,),
+                    "UPDATE recepten SET naam = ?, categorie = ? WHERE id = ?",
+                    (recept_naam, categorie, recept_id),
                 )
 
                 conn.commit()
@@ -282,16 +282,8 @@ def import_excel_to_database(
                 overwritten_recepten += 1
                 recepten_overwritten.add(recept_code)
 
-            cur = conn.cursor()
-            cur.execute(
-                """
-                INSERT INTO recepten (code, naam, categorie)
-                VALUES (?, ?, ?)
-                """,
-                (recept_code, recept_naam, categorie),
-            )
-            conn.commit()
-            recept_id = cur.lastrowid
+            else:
+                recept_id = row_db["id"]
 
         else:
             cur = conn.cursor()
