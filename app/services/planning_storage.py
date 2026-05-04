@@ -29,6 +29,29 @@ def init_planning_storage(conn):
         """
     )
 
+    planning_run_cols = conn.execute("PRAGMA table_info(planning_runs)").fetchall()
+    planning_run_col_names = {row["name"] for row in planning_run_cols}
+
+    if "beschrijving" not in planning_run_col_names:
+        conn.execute(
+            "ALTER TABLE planning_runs ADD COLUMN beschrijving TEXT DEFAULT ''"
+        )
+
+    if "aangemaakt_op" not in planning_run_col_names:
+        conn.execute(
+            "ALTER TABLE planning_runs ADD COLUMN aangemaakt_op TEXT DEFAULT CURRENT_TIMESTAMP"
+        )
+
+    if "laatst_gebruikt_op" not in planning_run_col_names:
+        conn.execute(
+            "ALTER TABLE planning_runs ADD COLUMN laatst_gebruikt_op TEXT DEFAULT CURRENT_TIMESTAMP"
+        )
+
+    if "actief" not in planning_run_col_names:
+        conn.execute(
+            "ALTER TABLE planning_runs ADD COLUMN actief INTEGER DEFAULT 0"
+        )
+
     existing_cols = conn.execute("PRAGMA table_info(planning_cache)").fetchall()
     col_names = {row["name"] for row in existing_cols}
 
