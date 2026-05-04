@@ -151,7 +151,11 @@ def cleanup_parent_handeling(conn, recept_id: int, parent_code: str):
     conn.commit()
 
 
-def import_excel_to_database(conn, file_bytes: bytes):
+def import_excel_to_database(
+    conn,
+    file_bytes: bytes,
+    overwrite_existing: bool = False,
+):
     df = pd.read_excel(BytesIO(file_bytes))
     df.columns = [str(c).strip() for c in df.columns]
     df = ensure_columns(df)
@@ -160,6 +164,10 @@ def import_excel_to_database(conn, file_bytes: bytes):
     imported_handelingen = 0
     imported_stappen = 0
     skipped_rows = 0
+    skipped_existing_recepten = 0
+    overwritten_recepten = 0
+    recepten_to_skip = set()
+    recepten_overwritten = set()
 
     seen_recepten = set()
     seen_handelingen = set()
@@ -224,17 +232,67 @@ def import_excel_to_database(conn, file_bytes: bytes):
         ).fetchone()
 
         if row_db:
-            recept_id = row_db["id"]
-            conn.execute(
+            if not overwrite_existing:
+                if recept_code not in recepten_to_skip:
+                    skipped_existing_recepten += 1
+                    recepten_to_skip.add(recept_code)
+
+                continue
+
+            if recept_code not in recepten_overwritten:
+                recept_id = row_db["id"]
+
+                conn.execute(
+                    """
+                    DELETE FROM stappen
+                    WHERE handeling_id IN (
+                        SELECT id FROM handelingen WHERE recept_id = ?
+                    )
+                    """,
+                    (recept_id,),
+                )
+
+                conn.execute(
+                    "DELETE FROM handelingen WHERE recept_id = ?",
+                    (recept_id,),
+                )
+
+                conn.execute(
+                    "DELETE FROM menu WHERE recept_id = ?",
+                    (recept_id,),
+                )
+
+                conn.execute(
+                    "DELETE FROM menu_recept_selectie WHERE recept_id = ?",
+                    (recept_id,),
+                )
+
+                conn.execute(
+                    "DELETE FROM planning_templates WHERE recept_id = ?",
+                    (recept_id,),
+                )
+
+                conn.execute(
+                    "DELETE FROM recepten WHERE id = ?",
+                    (recept_id,),
+                )
+
+                conn.commit()
+
+                overwritten_recepten += 1
+                recepten_overwritten.add(recept_code)
+
+            cur = conn.cursor()
+            cur.execute(
                 """
-                UPDATE recepten
-                SET naam = ?,
-                    categorie = ?
-                WHERE id = ?
+                INSERT INTO recepten (code, naam, categorie)
+                VALUES (?, ?, ?)
                 """,
-                (recept_naam, categorie, recept_id),
+                (recept_code, recept_naam, categorie),
             )
             conn.commit()
+            recept_id = cur.lastrowid
+
         else:
             cur = conn.cursor()
             cur.execute(
@@ -352,5 +410,7 @@ def import_excel_to_database(conn, file_bytes: bytes):
         "recepten": imported_recepten,
         "handelingen": imported_handelingen,
         "stappen": imported_stappen,
+        "overgeschreven_recepten": overwritten_recepten,
+        "overgeslagen_bestaande_recepten": skipped_existing_recepten,
         "overgeslagen_rijen": skipped_rows,
     }
