@@ -133,3 +133,18 @@ def delete_recipe_endpoint(recept_id: int):
         }
     finally:
         conn.close()
+
+@router.post("/admin/reset-recipes")
+def reset_recipes():
+    conn = get_db_connection()
+    try:
+        conn.execute("DELETE FROM stappen")
+        conn.execute("DELETE FROM handelingen")
+        conn.execute("DELETE FROM menu")
+        conn.execute("DELETE FROM menu_recept_selectie")
+        conn.execute("DELETE FROM planning_templates")
+        conn.execute("DELETE FROM recepten")
+        conn.commit()
+        return {"success": True}
+    finally:
+        conn.close()
