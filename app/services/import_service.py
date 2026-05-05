@@ -150,6 +150,41 @@ def cleanup_parent_handeling(conn, recept_id: int, parent_code: str):
     )
     conn.commit()
 
+def recipe_has_changes(conn, recept_code: str, incoming_map: dict) -> bool:
+    row = conn.execute(
+        "SELECT id FROM recepten WHERE code = ?",
+        (recept_code,),
+    ).fetchone()
+
+    if not row:
+        return False
+
+    recept_id = row["id"]
+
+    existing_handelingen = conn.execute(
+        """
+        SELECT code, naam, dag_offset, sort_order, post, toestel, passieve_tijd, is_vaste_taak
+        FROM handelingen
+        WHERE recept_id = ?
+        ORDER BY code
+        """,
+        (recept_id,),
+    ).fetchall()
+
+    existing_map = {
+        h["code"]: {
+            "handeling_naam": h["naam"],
+            "dag_offset": h["dag_offset"],
+            "volgorde_handeling": h["sort_order"],
+            "post": h["post"],
+            "toestel": h["toestel"],
+            "passieve_tijd": h["passieve_tijd"],
+            "is_vaste_taak": h["is_vaste_taak"],
+        }
+        for h in existing_handelingen
+    }
+
+    return existing_map != incoming_map
 
 def import_excel_to_database(
     conn,
@@ -168,9 +203,53 @@ def import_excel_to_database(
     overwritten_recepten = 0
     recepten_to_skip = set()
     recepten_overwritten = set()
+    effectief_gewijzigde_recepten = set()
+    incoming_by_recept = {}
 
     seen_recepten = set()
     seen_handelingen = set()
+
+    handeling_sort_orders = {}
+    stap_sort_orders = {}
+
+    incoming_by_recept = {}
+
+    for _, row in df.iterrows():
+        recept_code = clean_text(row["recept_code"])
+        recept_naam = clean_text(row["recept_naam"])
+        subgroep_code = clean_text(row["subgroep_code"])
+
+        handeling_code = clean_text(row["handeling_code"])
+        handeling_naam = clean_text(row["handeling_naam"])
+
+        if not recept_code or not recept_naam or not handeling_code or not handeling_naam:
+            continue
+
+        if is_parent_handeling_code(recept_code, subgroep_code, handeling_code):
+            continue
+
+        dag_offset = safe_int(row["dag_offset"], 0)
+
+        auto_handeling_order = get_auto_handeling_order(
+            handeling_sort_orders,
+            recept_code,
+            handeling_code,
+        )
+
+        volgorde_handeling = safe_int(
+            row["volgorde_handeling"],
+            auto_handeling_order,
+        )
+
+        incoming_by_recept.setdefault(recept_code, {})[handeling_code] = {
+            "handeling_naam": handeling_naam,
+            "dag_offset": dag_offset,
+            "volgorde_handeling": volgorde_handeling,
+            "post": normalize_post(row["post"]),
+            "toestel": normalize_toestel(row["toestel"]),
+            "passieve_tijd": safe_int(row["passieve_tijd"], 0),
+            "is_vaste_taak": safe_int(row["is_vaste_taak"], 0),
+        }
 
     handeling_sort_orders = {}
     stap_sort_orders = {}
@@ -241,6 +320,9 @@ def import_excel_to_database(
 
             if recept_code not in recepten_overwritten:
                 recept_id = row_db["id"]
+
+                if recipe_has_changes(conn, recept_code, incoming_by_recept.get(recept_code, {})):
+                    effectief_gewijzigde_recepten.add(recept_code)
 
                 conn.execute(
                     """
@@ -403,6 +485,7 @@ def import_excel_to_database(
         "handelingen": imported_handelingen,
         "stappen": imported_stappen,
         "overgeschreven_recepten": overwritten_recepten,
+        "effectief_gewijzigde_recepten": len(effectief_gewijzigde_recepten),
         "overgeslagen_bestaande_recepten": skipped_existing_recepten,
         "overgeslagen_rijen": skipped_rows,
     }
