@@ -246,10 +246,10 @@ def import_excel_to_database(
                     """
                     DELETE FROM stappen
                     WHERE handeling_id IN (
-                        SELECT id FROM handelingen WHERE recept_id = ?
+                        SELECT id FROM handelingen WHERE recept_id=? AND code=?
                     )
                     """,
-                    (recept_id,),
+                    (recept_id, handeling_code),
                 )
 
                 conn.execute(
