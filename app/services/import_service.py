@@ -231,8 +231,9 @@ def import_excel_to_database(
             continue
 
         dag_offset = safe_int(row["dag_offset"], 0)
-        dag_offset_min = safe_int(row["min_offset_dagen"], dag_offset)
-        dag_offset_max = safe_int(row["max_offset_dagen"], dag_offset)
+
+        dag_offset_min = safe_int(row.get("dag_offset_min"), dag_offset)
+        dag_offset_max = safe_int(row.get("dag_offset_max"), dag_offset)
 
         auto_handeling_order = get_auto_handeling_order(
             handeling_sort_orders,
