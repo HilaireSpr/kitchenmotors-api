@@ -443,7 +443,6 @@ def import_excel_to_database(
                     min_offset_dagen,
                     max_offset_dagen,
                     sort_order,
-                    sort_order,
                     post,
                     toestel,
                     passieve_tijd,
