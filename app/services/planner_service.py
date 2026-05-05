@@ -368,20 +368,20 @@ def run_planner(payload) -> dict:
         
         planning_naam = getattr(payload, "planning_naam", None)
 
-        if planning_naam:
-            planning_run_id = create_planning_run(
-                conn,
-                naam=planning_naam,
-                beschrijving=f"Menu-groep: {menu_groep or 'alle'} | Start: {payload.start_monday} | Cycli: {payload.cycles}",
-            )
+        if not planning_naam:
+            planning_naam = f"Planning {payload.start_monday} - {menu_groep or 'alle menu-groepen'}"
 
-            save_planning_df(
-                conn,
-                planning_df,
-                planning_run_id=planning_run_id,
-            )
-        else:
-            planning_run_id = None
+        planning_run_id = create_planning_run(
+            conn,
+            naam=planning_naam,
+            beschrijving=f"Menu-groep: {menu_groep or 'alle'} | Start: {payload.start_monday} | Cycli: {payload.cycles}",
+        )
+
+        save_planning_df(
+            conn,
+            planning_df,
+            planning_run_id=planning_run_id,
+        )
 
         debug_menu_rotation = None
         if menu_rotation:
