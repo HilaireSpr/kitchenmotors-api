@@ -15,6 +15,8 @@ OPTIONAL_DEFAULTS = {
     "categorie": "",
     "subgroep_code": "",
     "dag_offset": 0,
+    "min_offset_dagen": 0,
+    "max_offset_dagen": 0,
     "volgorde_handeling": None,
     "post": "-",
     "toestel": "Geen",
@@ -229,6 +231,8 @@ def import_excel_to_database(
             continue
 
         dag_offset = safe_int(row["dag_offset"], 0)
+        dag_offset_min = safe_int(row["min_offset_dagen"], dag_offset)
+        dag_offset_max = safe_int(row["max_offset_dagen"], dag_offset)
 
         auto_handeling_order = get_auto_handeling_order(
             handeling_sort_orders,
@@ -244,6 +248,8 @@ def import_excel_to_database(
         incoming_by_recept.setdefault(recept_code, {})[handeling_code] = {
             "handeling_naam": handeling_naam,
             "dag_offset": dag_offset,
+            "dag_offset_min": dag_offset_min,
+            "dag_offset_max": dag_offset_max,
             "volgorde_handeling": volgorde_handeling,
             "post": normalize_post(row["post"]),
             "toestel": normalize_toestel(row["toestel"]),
@@ -402,6 +408,8 @@ def import_excel_to_database(
                 UPDATE handelingen
                 SET naam=?,
                     dag_offset=?,
+                    min_offset_dagen=?,
+                    max_offset_dagen=?,
                     sort_order=?,
                     post=?,
                     toestel=?,
@@ -412,6 +420,8 @@ def import_excel_to_database(
                 (
                     handeling_naam,
                     dag_offset,
+                    dag_offset_min,
+                    dag_offset_max,
                     volgorde_handeling,
                     post,
                     toestel,
@@ -430,19 +440,24 @@ def import_excel_to_database(
                     code,
                     naam,
                     dag_offset,
+                    min_offset_dagen,
+                    max_offset_dagen,
+                    sort_order,
                     sort_order,
                     post,
                     toestel,
                     passieve_tijd,
                     is_vaste_taak
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     recept_id,
                     handeling_code,
                     handeling_naam,
                     dag_offset,
+                    dag_offset_min,
+                    dag_offset_max,
                     volgorde_handeling,
                     post,
                     toestel,
