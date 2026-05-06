@@ -10,9 +10,38 @@ from app.services.planning import (
     get_post_capaciteiten,
     sync_starturen,
 )
-from app.services.planning_overrides import set_task_move_after
-from app.services.planning_overrides import apply_planning_overrides
+from app.services.planning_overrides import (
+    apply_planning_overrides,
+    set_task_move_after,
+)
 from app.services.planning_storage import create_planning_run, save_planning_df
+
+
+BREAK_LABEL = "🕒 Pauze"
+
+
+def calculate_cycles_from_end_date(
+    start_monday: str,
+    end_date: str | None,
+    fallback_cycles: int,
+) -> int:
+    if not end_date:
+        return max(1, int(fallback_cycles or 1))
+
+    try:
+        start = datetime.strptime(start_monday, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+    except ValueError:
+        return max(1, int(fallback_cycles or 1))
+
+    if end < start:
+        return max(1, int(fallback_cycles or 1))
+
+    days = (end - start).days + 1
+    weeks = (days + 6) // 7
+
+    return max(1, weeks)
+
 
 # =========================================================
 # SAMENVATTINGEN / ANALYSE
@@ -25,7 +54,7 @@ def build_capacity_summary(conn, planning_df: pd.DataFrame) -> list[dict]:
     task_df = planning_df.copy()
 
     if "Taak" in task_df.columns:
-        task_df = task_df[task_df["Taak"] != "🕒 Pauze"]
+        task_df = task_df[task_df["Taak"] != BREAK_LABEL]
 
     if task_df.empty:
         return []
@@ -65,10 +94,10 @@ def build_capacity_summary(conn, planning_df: pd.DataFrame) -> list[dict]:
 
 def detect_toestel_conflicten(planning_df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
     if planning_df.empty:
-        planning_df = planning_df.copy()
-        planning_df["Toestel conflict"] = False
-        planning_df["Conflict details"] = ""
-        return planning_df, []
+        df = planning_df.copy()
+        df["Toestel conflict"] = False
+        df["Conflict details"] = ""
+        return df, []
 
     df = planning_df.copy()
     df["Toestel conflict"] = False
@@ -82,7 +111,7 @@ def detect_toestel_conflicten(planning_df: pd.DataFrame) -> tuple[pd.DataFrame, 
         df["Toestel"].notna()
         & (df["Toestel"] != "")
         & (df["Toestel"] != GEEN_TOESTEL)
-        & (df["Taak"] != "🕒 Pauze")
+        & (df["Taak"] != BREAK_LABEL)
     ].copy()
 
     if work_df.empty:
@@ -95,9 +124,7 @@ def detect_toestel_conflicten(planning_df: pd.DataFrame) -> tuple[pd.DataFrame, 
     conflict_details_map: dict[str, list[str]] = {}
     conflict_summary: list[dict] = []
 
-    grouped = work_df.groupby(["Werkdag_iso", "Toestel"], dropna=False)
-
-    for (werkdag_iso, toestel), group in grouped:
+    for (werkdag_iso, toestel), group in work_df.groupby(["Werkdag_iso", "Toestel"], dropna=False):
         group = group.sort_values(["Start_dt", "Einde_dt"]).reset_index()
 
         for i in range(len(group)):
@@ -116,17 +143,14 @@ def detect_toestel_conflicten(planning_df: pd.DataFrame) -> tuple[pd.DataFrame, 
                 a_id = str(a["Planning ID"])
                 b_id = str(b["Planning ID"])
 
-                a_detail = (
+                conflict_details_map.setdefault(a_id, []).append(
                     f"Overlap met {b['Taak']} ({b['Post']}) "
                     f"{b['Start_dt'].strftime('%H:%M')}–{b['Einde_dt'].strftime('%H:%M')}"
                 )
-                b_detail = (
+                conflict_details_map.setdefault(b_id, []).append(
                     f"Overlap met {a['Taak']} ({a['Post']}) "
                     f"{a['Start_dt'].strftime('%H:%M')}–{a['Einde_dt'].strftime('%H:%M')}"
                 )
-
-                conflict_details_map.setdefault(a_id, []).append(a_detail)
-                conflict_details_map.setdefault(b_id, []).append(b_detail)
 
                 conflict_summary.append(
                     {
@@ -145,13 +169,13 @@ def detect_toestel_conflicten(planning_df: pd.DataFrame) -> tuple[pd.DataFrame, 
                     }
                 )
 
-    if conflict_details_map:
-        for idx, row in df.iterrows():
-            planning_id = str(row.get("Planning ID"))
-            details = conflict_details_map.get(planning_id)
-            if details:
-                df.at[idx, "Toestel conflict"] = True
-                df.at[idx, "Conflict details"] = " | ".join(details)
+    for idx, row in df.iterrows():
+        planning_id = str(row.get("Planning ID"))
+        details = conflict_details_map.get(planning_id)
+
+        if details:
+            df.at[idx, "Toestel conflict"] = True
+            df.at[idx, "Conflict details"] = " | ".join(details)
 
     return df, conflict_summary
 
@@ -164,8 +188,8 @@ def apply_overrides(planning_df: pd.DataFrame, overrides) -> pd.DataFrame:
         return planning_df
 
     df = planning_df.copy()
+    active_overrides = [override for override in overrides if getattr(override, "locked", False)]
 
-    active_overrides = [o for o in overrides if getattr(o, "locked", False)]
     if not active_overrides:
         return df
 
@@ -178,18 +202,13 @@ def apply_overrides(planning_df: pd.DataFrame, overrides) -> pd.DataFrame:
         matched_override = None
 
         for override in active_overrides:
-            override_recept_id = getattr(override, "receptId", None)
-            override_handeling_id = getattr(override, "handelingId", None)
-            override_werkdag_iso = getattr(override, "werkdagIso", None)
-            override_planning_id = str(getattr(override, "planningId", ""))
-
             stable_match = (
-                override_recept_id == row_recept_id
-                and override_handeling_id == row_handeling_id
-                and override_werkdag_iso == row_werkdag_iso
+                getattr(override, "receptId", None) == row_recept_id
+                and getattr(override, "handelingId", None) == row_handeling_id
+                and getattr(override, "werkdagIso", None) == row_werkdag_iso
             )
 
-            fallback_match = override_planning_id == row_planning_id
+            fallback_match = str(getattr(override, "planningId", "")) == row_planning_id
 
             if stable_match or fallback_match:
                 matched_override = override
@@ -212,6 +231,7 @@ def apply_overrides(planning_df: pd.DataFrame, overrides) -> pd.DataFrame:
 
     return df
 
+
 def reorder_planning_task(conn, planning_id: str, move_after_planning_id: str):
     set_task_move_after(
         conn=conn,
@@ -220,6 +240,7 @@ def reorder_planning_task(conn, planning_id: str, move_after_planning_id: str):
     )
 
     return {"success": True}
+
 
 def move_planning_task(conn, planning_id: str, werkdag_override: str):
     now = datetime.utcnow().isoformat()
@@ -307,9 +328,15 @@ def reset_planning_override(conn, planning_id: str):
 # PLANNER RUN
 # =========================================================
 def run_planner(payload) -> dict:
-    overrides = payload.overrides if hasattr(payload, "overrides") else []
-    menu_rotation = payload.menu_rotation if hasattr(payload, "menu_rotation") else None
-    menu_groep = payload.menu_groep if hasattr(payload, "menu_groep") else None
+    overrides = getattr(payload, "overrides", [])
+    menu_rotation = getattr(payload, "menu_rotation", None)
+    menu_groep = getattr(payload, "menu_groep", None)
+
+    effective_cycles = calculate_cycles_from_end_date(
+        start_monday=payload.start_monday,
+        end_date=getattr(payload, "end_date", None),
+        fallback_cycles=getattr(payload, "cycles", 1),
+    )
 
     conn = get_db_connection()
 
@@ -318,22 +345,22 @@ def run_planner(payload) -> dict:
             "recepten": conn.execute("SELECT COUNT(*) AS cnt FROM recepten").fetchone()["cnt"],
             "handelingen": conn.execute("SELECT COUNT(*) AS cnt FROM handelingen").fetchone()["cnt"],
             "stappen": conn.execute("SELECT COUNT(*) AS cnt FROM stappen").fetchone()["cnt"],
-            "planning_templates": conn.execute("SELECT COUNT(*) AS cnt FROM planning_templates").fetchone()["cnt"],
+            "planning_templates": conn.execute(
+                "SELECT COUNT(*) AS cnt FROM planning_templates"
+            ).fetchone()["cnt"],
             "menu_recept_selectie_actief": conn.execute(
                 "SELECT COUNT(*) AS cnt FROM menu_recept_selectie WHERE actief = 1"
             ).fetchone()["cnt"],
             "menu_before": conn.execute("SELECT COUNT(*) AS cnt FROM menu").fetchone()["cnt"],
         }
 
-        menu_after_generate = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM menu"
-        ).fetchone()["cnt"]
+        menu_after_generate = conn.execute("SELECT COUNT(*) AS cnt FROM menu").fetchone()["cnt"]
 
         sync_starturen(
             conn=conn,
             start_monday=payload.start_monday,
             start_week=payload.start_week,
-            cycles=payload.cycles,
+            cycles=effective_cycles,
             menu_groep=menu_groep,
         )
 
@@ -345,13 +372,14 @@ def run_planner(payload) -> dict:
             conn=conn,
             start_monday=payload.start_monday,
             start_week=payload.start_week,
-            cycles=payload.cycles,
+            cycles=effective_cycles,
             menu_groep=menu_groep,
         )
 
         planning_df = apply_planning_overrides(conn, planning_df)
         planning_df = apply_overrides(planning_df, overrides)
         planning_df, conflict_summary = detect_toestel_conflicten(planning_df)
+
         capacity_summary = build_capacity_summary(conn, planning_df)
         conflict_count = len(conflict_summary)
 
@@ -365,16 +393,22 @@ def run_planner(payload) -> dict:
         planning_df = planning_df.where(pd.notna(planning_df), None)
 
         rows = planning_df.to_dict(orient="records")
-        
+
         planning_naam = getattr(payload, "planning_naam", None)
 
         if not planning_naam:
             planning_naam = f"Planning {payload.start_monday} - {menu_groep or 'alle menu-groepen'}"
 
+        description_end_date = getattr(payload, "end_date", None) or "-"
         planning_run_id = create_planning_run(
             conn,
             naam=planning_naam,
-            beschrijving=f"Menu-groep: {menu_groep or 'alle'} | Start: {payload.start_monday} | Cycli: {payload.cycles}",
+            beschrijving=(
+                f"Menu-groep: {menu_groep or 'alle'} | "
+                f"Start: {payload.start_monday} | "
+                f"Einde: {description_end_date} | "
+                f"Weken: {effective_cycles}"
+            ),
         )
 
         save_planning_df(
@@ -400,14 +434,15 @@ def run_planner(payload) -> dict:
             "conflict_summary": conflict_summary,
             "conflict_count": conflict_count,
             "debug_overrides": [
-                o.model_dump() if hasattr(o, "model_dump") else o.dict()
-                for o in overrides
+                override.model_dump() if hasattr(override, "model_dump") else override.dict()
+                for override in overrides
             ],
             "debug_menu_rotation": debug_menu_rotation,
             "debug_counts": {
                 **before_counts,
                 "menu_after_generate": menu_after_generate,
                 "planning_starturen": starturen_count,
+                "effective_cycles": effective_cycles,
             },
         }
 
