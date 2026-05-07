@@ -24,6 +24,7 @@ from app.services.planning_overrides import (
     set_task_lock,
 )
 from app.services.planning_storage import (
+    delete_planning_run,
     get_planning_runs,
     load_planning_df,
     set_active_planning_run,
@@ -79,6 +80,14 @@ def get_planning_run_rows_endpoint(planning_run_id: int):
     finally:
         conn.close()
 
+@router.delete("/runs/{planning_run_id}")
+def delete_planning_run_endpoint(planning_run_id: int):
+    conn = get_db_connection()
+    try:
+        delete_planning_run(conn, planning_run_id)
+        return {"success": True}
+    finally:
+        conn.close()
 
 @router.post("/run")
 def run_planning_endpoint(payload: PlanningRequest):
