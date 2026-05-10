@@ -4,9 +4,11 @@ import pandas as pd
 
 from app.services.planning_storage import _ensure_default_planning_run
 
+
 def _get_run_id(conn, planning_run_id=None) -> int:
     if planning_run_id is not None:
         return int(planning_run_id)
+
     return int(_ensure_default_planning_run(conn))
 
 
@@ -19,6 +21,7 @@ def init_planning_overrides_table(conn):
             start_offset_minutes INTEGER DEFAULT 0,
             post_override TEXT,
             toestel_override TEXT,
+            werkdag_override TEXT,
             locked INTEGER DEFAULT 0,
             move_before_planning_id TEXT,
             move_after_planning_id TEXT,
@@ -36,15 +39,31 @@ def init_planning_overrides_table(conn):
             "ALTER TABLE planning_overrides ADD COLUMN planning_run_id INTEGER DEFAULT 1"
         )
 
-    if "move_before_planning_id" not in col_names:
+    if "start_offset_minutes" not in col_names:
         conn.execute(
-            "ALTER TABLE planning_overrides ADD COLUMN move_before_planning_id TEXT"
+            "ALTER TABLE planning_overrides ADD COLUMN start_offset_minutes INTEGER DEFAULT 0"
         )
 
+    if "post_override" not in col_names:
+        conn.execute("ALTER TABLE planning_overrides ADD COLUMN post_override TEXT")
+
+    if "toestel_override" not in col_names:
+        conn.execute("ALTER TABLE planning_overrides ADD COLUMN toestel_override TEXT")
+
+    if "werkdag_override" not in col_names:
+        conn.execute("ALTER TABLE planning_overrides ADD COLUMN werkdag_override TEXT")
+
+    if "locked" not in col_names:
+        conn.execute("ALTER TABLE planning_overrides ADD COLUMN locked INTEGER DEFAULT 0")
+
+    if "move_before_planning_id" not in col_names:
+        conn.execute("ALTER TABLE planning_overrides ADD COLUMN move_before_planning_id TEXT")
+
     if "move_after_planning_id" not in col_names:
-        conn.execute(
-            "ALTER TABLE planning_overrides ADD COLUMN move_after_planning_id TEXT"
-        )
+        conn.execute("ALTER TABLE planning_overrides ADD COLUMN move_after_planning_id TEXT")
+
+    if "updated_at" not in col_names:
+        conn.execute("ALTER TABLE planning_overrides ADD COLUMN updated_at TEXT DEFAULT CURRENT_TIMESTAMP")
 
     conn.commit()
 
@@ -61,6 +80,7 @@ def get_planning_overrides_df(conn, planning_run_id=None) -> pd.DataFrame:
             COALESCE(start_offset_minutes, 0) AS start_offset_minutes,
             post_override,
             toestel_override,
+            werkdag_override,
             COALESCE(locked, 0) AS locked,
             move_before_planning_id,
             move_after_planning_id,
@@ -71,22 +91,23 @@ def get_planning_overrides_df(conn, planning_run_id=None) -> pd.DataFrame:
         (run_id,),
     ).fetchall()
 
-    if not rows:
-        return pd.DataFrame(
-            columns=[
-                "planning_run_id",
-                "planning_id",
-                "start_offset_minutes",
-                "post_override",
-                "toestel_override",
-                "locked",
-                "move_before_planning_id",
-                "move_after_planning_id",
-                "updated_at",
-            ]
-        )
+    columns = [
+        "planning_run_id",
+        "planning_id",
+        "start_offset_minutes",
+        "post_override",
+        "toestel_override",
+        "werkdag_override",
+        "locked",
+        "move_before_planning_id",
+        "move_after_planning_id",
+        "updated_at",
+    ]
 
-    return pd.DataFrame([dict(r) for r in rows])
+    if not rows:
+        return pd.DataFrame(columns=columns)
+
+    return pd.DataFrame([dict(row) for row in rows])
 
 
 def get_override_for_planning_id(conn, planning_id: str, planning_run_id=None):
@@ -101,6 +122,7 @@ def get_override_for_planning_id(conn, planning_id: str, planning_run_id=None):
             COALESCE(start_offset_minutes, 0) AS start_offset_minutes,
             post_override,
             toestel_override,
+            werkdag_override,
             COALESCE(locked, 0) AS locked,
             move_before_planning_id,
             move_after_planning_id,
@@ -113,6 +135,25 @@ def get_override_for_planning_id(conn, planning_id: str, planning_run_id=None):
     ).fetchone()
 
 
+def _normalize_nullable_text(value):
+    if value is None:
+        return None
+
+    value = str(value).strip()
+    return value if value else None
+
+
+def _normalize_move_value(new_value, old_value):
+    if new_value is None:
+        return old_value
+
+    if new_value == "__CLEAR__":
+        return None
+
+    new_value = str(new_value).strip()
+    return new_value if new_value else None
+
+
 def upsert_planning_override(
     conn,
     planning_id: str,
@@ -120,6 +161,7 @@ def upsert_planning_override(
     start_offset_minutes=None,
     post_override=None,
     toestel_override=None,
+    werkdag_override=None,
     locked=None,
     move_before_planning_id=None,
     move_after_planning_id=None,
@@ -129,42 +171,38 @@ def upsert_planning_override(
 
     existing = get_override_for_planning_id(conn, planning_id, run_id)
 
-    def _normalize_nullable_text(value):
-        if value is None:
-            return None
-        value = str(value).strip()
-        return value if value else None
-
-    def _normalize_move_value(new_value, old_value):
-        if new_value is None:
-            return old_value
-        if new_value == "__CLEAR__":
-            return None
-        new_value = str(new_value).strip()
-        return new_value if new_value else None
-
     if existing:
         new_start_offset = (
             int(start_offset_minutes)
             if start_offset_minutes is not None
             else int(existing["start_offset_minutes"] or 0)
         )
+
         new_post_override = (
             _normalize_nullable_text(post_override)
             if post_override is not None
             else existing["post_override"]
         )
+
         new_toestel_override = (
             _normalize_nullable_text(toestel_override)
             if toestel_override is not None
             else existing["toestel_override"]
         )
+
+        new_werkdag_override = (
+            _normalize_nullable_text(werkdag_override)
+            if werkdag_override is not None
+            else existing["werkdag_override"]
+        )
+
         new_locked = int(locked) if locked is not None else int(existing["locked"] or 0)
 
         new_move_before = _normalize_move_value(
             move_before_planning_id,
             existing["move_before_planning_id"],
         )
+
         new_move_after = _normalize_move_value(
             move_after_planning_id,
             existing["move_after_planning_id"],
@@ -177,6 +215,7 @@ def upsert_planning_override(
                 start_offset_minutes = ?,
                 post_override = ?,
                 toestel_override = ?,
+                werkdag_override = ?,
                 locked = ?,
                 move_before_planning_id = ?,
                 move_after_planning_id = ?,
@@ -188,6 +227,7 @@ def upsert_planning_override(
                 new_start_offset,
                 new_post_override,
                 new_toestel_override,
+                new_werkdag_override,
                 new_locked,
                 new_move_before,
                 new_move_after,
@@ -195,6 +235,7 @@ def upsert_planning_override(
                 planning_id,
             ),
         )
+
     else:
         conn.execute(
             """
@@ -204,12 +245,13 @@ def upsert_planning_override(
                 start_offset_minutes,
                 post_override,
                 toestel_override,
+                werkdag_override,
                 locked,
                 move_before_planning_id,
                 move_after_planning_id,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             (
                 run_id,
@@ -217,6 +259,7 @@ def upsert_planning_override(
                 int(start_offset_minutes or 0),
                 _normalize_nullable_text(post_override),
                 _normalize_nullable_text(toestel_override),
+                _normalize_nullable_text(werkdag_override),
                 int(locked or 0),
                 _normalize_move_value(move_before_planning_id, None),
                 _normalize_move_value(move_after_planning_id, None),
@@ -226,26 +269,54 @@ def upsert_planning_override(
     conn.commit()
 
 
-def shift_task_minutes(conn, planning_id: str, delta_minutes: int, planning_run_id=None):
+def set_task_workday_override(conn, planning_id: str, werkdag_override: str, planning_run_id=None):
     existing = get_override_for_planning_id(conn, planning_id, planning_run_id)
-
-    current_offset = int(existing["start_offset_minutes"] or 0) if existing else 0
-    current_post = existing["post_override"] if existing else None
-    current_toestel = existing["toestel_override"] if existing else None
-    current_locked = int(existing["locked"] or 0) if existing else 0
-    current_before = existing["move_before_planning_id"] if existing else None
-    current_after = existing["move_after_planning_id"] if existing else None
 
     upsert_planning_override(
         conn,
         planning_id=planning_id,
         planning_run_id=planning_run_id,
-        start_offset_minutes=current_offset + int(delta_minutes),
-        post_override=current_post,
-        toestel_override=current_toestel,
-        locked=current_locked,
-        move_before_planning_id=current_before,
-        move_after_planning_id=current_after,
+        start_offset_minutes=int(existing["start_offset_minutes"] or 0) if existing else 0,
+        post_override=existing["post_override"] if existing else None,
+        toestel_override=existing["toestel_override"] if existing else None,
+        werkdag_override=werkdag_override,
+        locked=int(existing["locked"] or 0) if existing else 0,
+        move_before_planning_id=existing["move_before_planning_id"] if existing else None,
+        move_after_planning_id=existing["move_after_planning_id"] if existing else None,
+    )
+
+
+def set_task_post_override(conn, planning_id: str, post_override: str | None, planning_run_id=None):
+    existing = get_override_for_planning_id(conn, planning_id, planning_run_id)
+
+    upsert_planning_override(
+        conn,
+        planning_id=planning_id,
+        planning_run_id=planning_run_id,
+        start_offset_minutes=int(existing["start_offset_minutes"] or 0) if existing else 0,
+        post_override=post_override,
+        toestel_override=existing["toestel_override"] if existing else None,
+        werkdag_override=existing["werkdag_override"] if existing else None,
+        locked=int(existing["locked"] or 0) if existing else 0,
+        move_before_planning_id=existing["move_before_planning_id"] if existing else None,
+        move_after_planning_id=existing["move_after_planning_id"] if existing else None,
+    )
+
+
+def set_task_toestel_override(conn, planning_id: str, toestel_override: str | None, planning_run_id=None):
+    existing = get_override_for_planning_id(conn, planning_id, planning_run_id)
+
+    upsert_planning_override(
+        conn,
+        planning_id=planning_id,
+        planning_run_id=planning_run_id,
+        start_offset_minutes=int(existing["start_offset_minutes"] or 0) if existing else 0,
+        post_override=existing["post_override"] if existing else None,
+        toestel_override=toestel_override,
+        werkdag_override=existing["werkdag_override"] if existing else None,
+        locked=int(existing["locked"] or 0) if existing else 0,
+        move_before_planning_id=existing["move_before_planning_id"] if existing else None,
+        move_after_planning_id=existing["move_after_planning_id"] if existing else None,
     )
 
 
@@ -259,47 +330,8 @@ def set_task_lock(conn, planning_id: str, locked: bool, planning_run_id=None):
         start_offset_minutes=int(existing["start_offset_minutes"] or 0) if existing else 0,
         post_override=existing["post_override"] if existing else None,
         toestel_override=existing["toestel_override"] if existing else None,
+        werkdag_override=existing["werkdag_override"] if existing else None,
         locked=1 if locked else 0,
-        move_before_planning_id=existing["move_before_planning_id"] if existing else None,
-        move_after_planning_id=existing["move_after_planning_id"] if existing else None,
-    )
-
-
-def set_task_post_override(conn, planning_id: str, post_override: str | None, planning_run_id=None):
-    existing = get_override_for_planning_id(conn, planning_id, planning_run_id)
-
-    cleaned_post = str(post_override).strip() if post_override is not None else None
-    if cleaned_post == "":
-        cleaned_post = None
-
-    upsert_planning_override(
-        conn,
-        planning_id=planning_id,
-        planning_run_id=planning_run_id,
-        start_offset_minutes=int(existing["start_offset_minutes"] or 0) if existing else 0,
-        post_override=cleaned_post,
-        toestel_override=existing["toestel_override"] if existing else None,
-        locked=int(existing["locked"] or 0) if existing else 0,
-        move_before_planning_id=existing["move_before_planning_id"] if existing else None,
-        move_after_planning_id=existing["move_after_planning_id"] if existing else None,
-    )
-
-
-def set_task_toestel_override(conn, planning_id: str, toestel_override: str | None, planning_run_id=None):
-    existing = get_override_for_planning_id(conn, planning_id, planning_run_id)
-
-    cleaned_toestel = str(toestel_override).strip() if toestel_override is not None else None
-    if cleaned_toestel == "":
-        cleaned_toestel = None
-
-    upsert_planning_override(
-        conn,
-        planning_id=planning_id,
-        planning_run_id=planning_run_id,
-        start_offset_minutes=int(existing["start_offset_minutes"] or 0) if existing else 0,
-        post_override=existing["post_override"] if existing else None,
-        toestel_override=cleaned_toestel,
-        locked=int(existing["locked"] or 0) if existing else 0,
         move_before_planning_id=existing["move_before_planning_id"] if existing else None,
         move_after_planning_id=existing["move_after_planning_id"] if existing else None,
     )
@@ -315,6 +347,7 @@ def set_task_move_before(conn, planning_id: str, target_planning_id: str, planni
         start_offset_minutes=int(existing["start_offset_minutes"] or 0) if existing else 0,
         post_override=existing["post_override"] if existing else None,
         toestel_override=existing["toestel_override"] if existing else None,
+        werkdag_override=existing["werkdag_override"] if existing else None,
         locked=int(existing["locked"] or 0) if existing else 0,
         move_before_planning_id=target_planning_id,
         move_after_planning_id="__CLEAR__",
@@ -331,36 +364,30 @@ def set_task_move_after(conn, planning_id: str, target_planning_id: str, plannin
         start_offset_minutes=int(existing["start_offset_minutes"] or 0) if existing else 0,
         post_override=existing["post_override"] if existing else None,
         toestel_override=existing["toestel_override"] if existing else None,
+        werkdag_override=existing["werkdag_override"] if existing else None,
         locked=int(existing["locked"] or 0) if existing else 0,
         move_before_planning_id="__CLEAR__",
         move_after_planning_id=target_planning_id,
     )
 
 
-def clear_overrides_for_workday(conn, werkdag_iso: str, planning_run_id=None) -> int:
-    """
-    Verwijdert alle overrides voor taken van één werkdag binnen de actieve planning run.
-    Geeft aantal verwijderde overrides terug.
-    """
-    run_id = _get_run_id(conn, planning_run_id)
-    cur = conn.cursor()
+def shift_task_minutes(conn, planning_id: str, delta_minutes: int, planning_run_id=None):
+    existing = get_override_for_planning_id(conn, planning_id, planning_run_id)
 
-    cur.execute(
-        """
-        DELETE FROM planning_overrides
-        WHERE planning_run_id = ?
-          AND planning_id IN (
-              SELECT DISTINCT planning_id
-              FROM planning
-              WHERE werkdag_iso = ?
-          )
-        """,
-        (run_id, werkdag_iso),
+    current_offset = int(existing["start_offset_minutes"] or 0) if existing else 0
+
+    upsert_planning_override(
+        conn,
+        planning_id=planning_id,
+        planning_run_id=planning_run_id,
+        start_offset_minutes=current_offset + int(delta_minutes),
+        post_override=existing["post_override"] if existing else None,
+        toestel_override=existing["toestel_override"] if existing else None,
+        werkdag_override=existing["werkdag_override"] if existing else None,
+        locked=int(existing["locked"] or 0) if existing else 0,
+        move_before_planning_id=existing["move_before_planning_id"] if existing else None,
+        move_after_planning_id=existing["move_after_planning_id"] if existing else None,
     )
-
-    deleted = cur.rowcount
-    conn.commit()
-    return deleted
 
 
 def clear_task_override(conn, planning_id: str, planning_run_id=None):
@@ -395,6 +422,8 @@ def _apply_reorder_within_group(group: pd.DataFrame) -> pd.DataFrame:
 
     group = group.copy().reset_index(drop=True)
 
+    planning_ids_in_group = set(group["Planning ID"].astype(str).tolist())
+
     candidate_rows = group[
         (~group["Taak"].astype(str).str.lower().str.contains("pauze", na=False))
         & (~group["Locked"].fillna(False))
@@ -403,8 +432,6 @@ def _apply_reorder_within_group(group: pd.DataFrame) -> pd.DataFrame:
     if candidate_rows.empty:
         return group
 
-    planning_ids_in_group = set(group["Planning ID"].astype(str).tolist())
-
     for _, move_row in candidate_rows.iterrows():
         source_id = str(move_row["Planning ID"])
         move_before = move_row.get("move_before_planning_id")
@@ -412,37 +439,76 @@ def _apply_reorder_within_group(group: pd.DataFrame) -> pd.DataFrame:
 
         if pd.notna(move_before) and str(move_before).strip():
             target_id = str(move_before).strip()
+
             if target_id != source_id and target_id in planning_ids_in_group:
-                target_locked = bool(
-                    group.loc[group["Planning ID"] == target_id, "Locked"].iloc[0]
-                )
+                target_locked = bool(group.loc[group["Planning ID"] == target_id, "Locked"].iloc[0])
+
                 if not target_locked:
                     row_to_move = group[group["Planning ID"] == source_id].copy()
                     group = group[group["Planning ID"] != source_id].reset_index(drop=True)
+
                     target_idx = group.index[group["Planning ID"] == target_id].tolist()
                     if target_idx:
                         insert_at = target_idx[0]
-                        top = group.iloc[:insert_at]
-                        bottom = group.iloc[insert_at:]
-                        group = pd.concat([top, row_to_move, bottom], ignore_index=True)
+                        group = pd.concat(
+                            [group.iloc[:insert_at], row_to_move, group.iloc[insert_at:]],
+                            ignore_index=True,
+                        )
 
         elif pd.notna(move_after) and str(move_after).strip():
             target_id = str(move_after).strip()
+
             if target_id != source_id and target_id in planning_ids_in_group:
-                target_locked = bool(
-                    group.loc[group["Planning ID"] == target_id, "Locked"].iloc[0]
-                )
+                target_locked = bool(group.loc[group["Planning ID"] == target_id, "Locked"].iloc[0])
+
                 if not target_locked:
                     row_to_move = group[group["Planning ID"] == source_id].copy()
                     group = group[group["Planning ID"] != source_id].reset_index(drop=True)
+
                     target_idx = group.index[group["Planning ID"] == target_id].tolist()
                     if target_idx:
                         insert_at = target_idx[0] + 1
-                        top = group.iloc[:insert_at]
-                        bottom = group.iloc[insert_at:]
-                        group = pd.concat([top, row_to_move, bottom], ignore_index=True)
+                        group = pd.concat(
+                            [group.iloc[:insert_at], row_to_move, group.iloc[insert_at:]],
+                            ignore_index=True,
+                        )
 
     return group.reset_index(drop=True)
+
+
+def _apply_workday_overrides(result: pd.DataFrame) -> pd.DataFrame:
+    if "werkdag_override" not in result.columns:
+        return result
+
+    has_workday_override = result["werkdag_override"].notna() & (
+        result["werkdag_override"].astype(str).str.strip() != ""
+    )
+
+    if not has_workday_override.any():
+        return result
+
+    for idx in result[has_workday_override].index:
+        new_werkdag_iso = str(result.at[idx, "werkdag_override"]).strip()
+        old_werkdag_iso = str(result.at[idx, "Werkdag_iso"]).strip()
+
+        old_day = pd.to_datetime(old_werkdag_iso, errors="coerce")
+        new_day = pd.to_datetime(new_werkdag_iso, errors="coerce")
+
+        if pd.isna(old_day) or pd.isna(new_day):
+            continue
+
+        delta = new_day.date() - old_day.date()
+
+        result.at[idx, "Werkdag_iso"] = new_werkdag_iso
+        result.at[idx, "Werkdag"] = new_day.strftime("%d/%m/%Y")
+
+        if pd.notna(result.at[idx, "Start"]):
+            result.at[idx, "Start"] = result.at[idx, "Start"] + timedelta(days=delta.days)
+
+        if pd.notna(result.at[idx, "Einde"]):
+            result.at[idx, "Einde"] = result.at[idx, "Einde"] + timedelta(days=delta.days)
+
+    return result
 
 
 def apply_planning_overrides(conn, planning_df: pd.DataFrame, planning_run_id=None) -> pd.DataFrame:
@@ -484,20 +550,23 @@ def apply_planning_overrides(conn, planning_df: pd.DataFrame, planning_run_id=No
     result["Start"] = pd.to_datetime(result["Start"], errors="coerce")
     result["Einde"] = pd.to_datetime(result["Einde"], errors="coerce")
 
+    result = _apply_workday_overrides(result)
+
     has_post_override = result["post_override"].notna() & (
         result["post_override"].astype(str).str.strip() != ""
     )
+
     if has_post_override.any():
-        result.loc[has_post_override, "Post"] = result.loc[
-            has_post_override, "post_override"
-        ]
+        result.loc[has_post_override, "Post"] = result.loc[has_post_override, "post_override"]
 
     has_toestel_override = result["toestel_override"].notna() & (
         result["toestel_override"].astype(str).str.strip() != ""
     )
+
     if has_toestel_override.any():
         result.loc[has_toestel_override, "Toestel"] = result.loc[
-            has_toestel_override, "toestel_override"
+            has_toestel_override,
+            "toestel_override",
         ]
 
     result["Locked"] = result["locked"] == 1
@@ -509,6 +578,7 @@ def apply_planning_overrides(conn, planning_df: pd.DataFrame, planning_run_id=No
     ).reset_index(drop=True)
 
     reordered_groups = []
+
     for _, group in result.groupby(["Werkdag_iso", "Post"], sort=False):
         reordered_groups.append(_apply_reorder_within_group(group))
 
@@ -581,9 +651,15 @@ def apply_planning_overrides(conn, planning_df: pd.DataFrame, planning_run_id=No
     final_has_post_override = result["post_override"].notna() & (
         result["post_override"].astype(str).str.strip() != ""
     )
+
     final_has_toestel_override = result["toestel_override"].notna() & (
         result["toestel_override"].astype(str).str.strip() != ""
     )
+
+    final_has_workday_override = result["werkdag_override"].notna() & (
+        result["werkdag_override"].astype(str).str.strip() != ""
+    )
+
     final_has_reorder = (
         (
             result["move_before_planning_id"].notna()
@@ -600,6 +676,7 @@ def apply_planning_overrides(conn, planning_df: pd.DataFrame, planning_run_id=No
         | (result["Domino offset minuten"] != 0)
         | final_has_post_override
         | final_has_toestel_override
+        | final_has_workday_override
         | final_has_reorder
     )
 
@@ -609,12 +686,13 @@ def apply_planning_overrides(conn, planning_df: pd.DataFrame, planning_run_id=No
         "start_offset_minutes",
         "post_override",
         "toestel_override",
+        "werkdag_override",
         "locked",
         "move_before_planning_id",
         "move_after_planning_id",
         "updated_at",
     ]
 
-    result = result.drop(columns=[c for c in drop_cols if c in result.columns])
+    result = result.drop(columns=[col for col in drop_cols if col in result.columns])
 
     return result

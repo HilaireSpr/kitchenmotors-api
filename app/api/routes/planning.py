@@ -15,11 +15,12 @@ from app.services.planner_service import (
     lock_planning_task,
     move_planning_task,
     override_planning_post,
-    run_planner,
-    reset_planning_override,
     reorder_planning_task,
+    reset_planning_override,
+    run_planner,
 )
 from app.services.planning_overrides import (
+    apply_planning_overrides,
     clear_task_override,
     set_task_lock,
 )
@@ -31,6 +32,17 @@ from app.services.planning_storage import (
 )
 
 router = APIRouter()
+
+
+def dataframe_to_rows(df):
+    if "Start" in df.columns:
+        df["Start"] = df["Start"].astype(str)
+
+    if "Einde" in df.columns:
+        df["Einde"] = df["Einde"].astype(str)
+
+    json_data = df.to_json(orient="records", date_format="iso")
+    return json.loads(json_data)
 
 
 @router.get("/runs")
@@ -71,14 +83,19 @@ def get_planning_run_rows_endpoint(planning_run_id: int):
                 "result": {"rows": []},
             }
 
-        json_data = df.to_json(orient="records", date_format="iso")
+        df = apply_planning_overrides(
+            conn=conn,
+            planning_df=df,
+            planning_run_id=planning_run_id,
+        )
 
         return {
             "success": True,
-            "result": {"rows": json.loads(json_data)},
+            "result": {"rows": dataframe_to_rows(df)},
         }
     finally:
         conn.close()
+
 
 @router.delete("/runs/{planning_run_id}")
 def delete_planning_run_endpoint(planning_run_id: int):
@@ -88,6 +105,7 @@ def delete_planning_run_endpoint(planning_run_id: int):
         return {"success": True}
     finally:
         conn.close()
+
 
 @router.post("/run")
 def run_planning_endpoint(payload: PlanningRequest):
@@ -107,6 +125,7 @@ def move_planning_task_endpoint(payload: PlanningMoveOverrideRequest):
             conn=conn,
             planning_id=payload.planning_id,
             werkdag_override=payload.werkdag_override,
+            planning_run_id=payload.planning_run_id,
         )
         return {"success": True, "result": result}
     finally:
@@ -121,33 +140,7 @@ def override_planning_post_endpoint(payload: PlanningPostOverrideRequest):
             conn=conn,
             planning_id=payload.planning_id,
             post_override=payload.post_override,
-        )
-        return {"success": True, "result": result}
-    finally:
-        conn.close()
-
-
-@router.post("/lock")
-def lock_planning_task_endpoint(payload: PlanningLockRequest):
-    conn = get_db_connection()
-    try:
-        result = lock_planning_task(
-            conn=conn,
-            planning_id=payload.planning_id,
-            locked=payload.locked,
-        )
-        return {"success": True, "result": result}
-    finally:
-        conn.close()
-
-
-@router.post("/reset")
-def reset_planning_override_endpoint(payload: PlanningResetRequest):
-    conn = get_db_connection()
-    try:
-        result = reset_planning_override(
-            conn=conn,
-            planning_id=payload.planning_id,
+            planning_run_id=payload.planning_run_id,
         )
         return {"success": True, "result": result}
     finally:
@@ -162,6 +155,36 @@ def reorder_planning_task_endpoint(payload: PlanningReorderRequest):
             conn=conn,
             planning_id=payload.planning_id,
             move_after_planning_id=payload.move_after_planning_id,
+            planning_run_id=payload.planning_run_id,
+        )
+        return {"success": True, "result": result}
+    finally:
+        conn.close()
+
+
+@router.post("/lock")
+def lock_planning_task_endpoint(payload: PlanningLockRequest):
+    conn = get_db_connection()
+    try:
+        result = lock_planning_task(
+            conn=conn,
+            planning_id=payload.planning_id,
+            locked=payload.locked,
+            planning_run_id=payload.planning_run_id,
+        )
+        return {"success": True, "result": result}
+    finally:
+        conn.close()
+
+
+@router.post("/reset")
+def reset_planning_override_endpoint(payload: PlanningResetRequest):
+    conn = get_db_connection()
+    try:
+        result = reset_planning_override(
+            conn=conn,
+            planning_id=payload.planning_id,
+            planning_run_id=payload.planning_run_id,
         )
         return {"success": True, "result": result}
     finally:
@@ -173,9 +196,10 @@ def set_lock(payload: dict):
     conn = get_db_connection()
     try:
         set_task_lock(
-            conn,
+            conn=conn,
             planning_id=payload["planning_id"],
             locked=payload["locked"],
+            planning_run_id=payload.get("planning_run_id"),
         )
         return {"success": True}
     finally:
@@ -187,26 +211,31 @@ def clear_override(payload: dict):
     conn = get_db_connection()
     try:
         clear_task_override(
-            conn,
+            conn=conn,
             planning_id=payload["planning_id"],
+            planning_run_id=payload.get("planning_run_id"),
         )
         return {"success": True}
     finally:
         conn.close()
 
+
 @router.post("/admin/cleanup-handelingen")
 def cleanup_handelingen():
     conn = get_db_connection()
     try:
-        conn.execute("""
-        DELETE FROM handelingen
-        WHERE code NOT LIKE '%_[0-9]'
-        """)
+        conn.execute(
+            """
+            DELETE FROM handelingen
+            WHERE code NOT LIKE '%_[0-9]'
+            """
+        )
         conn.commit()
 
         return {"success": True, "message": "Cleanup uitgevoerd"}
     finally:
         conn.close()
+
 
 @router.post("/admin/reset-recipes")
 def reset_recipes():

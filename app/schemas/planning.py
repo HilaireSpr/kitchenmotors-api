@@ -32,20 +32,24 @@ class PlanningRequest(BaseModel):
 class PlanningMoveOverrideRequest(BaseModel):
     planning_id: str
     werkdag_override: str
+    planning_run_id: Optional[int] = None
 
 
 class PlanningPostOverrideRequest(BaseModel):
     planning_id: str
     post_override: str
+    planning_run_id: Optional[int] = None
 
 
 class PlanningLockRequest(BaseModel):
     planning_id: str
     locked: bool
+    planning_run_id: Optional[int] = None
 
 
 class PlanningResetRequest(BaseModel):
     planning_id: str
+    planning_run_id: Optional[int] = None
 
 
 class PlanningStartuurUpdateRequest(BaseModel):
@@ -56,3 +60,4 @@ class PlanningStartuurUpdateRequest(BaseModel):
 class PlanningReorderRequest(BaseModel):
     planning_id: str
     move_after_planning_id: str
+    planning_run_id: Optional[int] = None

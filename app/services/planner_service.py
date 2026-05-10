@@ -12,7 +12,11 @@ from app.services.planning import (
 )
 from app.services.planning_overrides import (
     apply_planning_overrides,
+    clear_task_override,
+    set_task_lock,
     set_task_move_after,
+    set_task_post_override,
+    set_task_workday_override,
 )
 from app.services.planning_storage import create_planning_run, save_planning_df
 
@@ -43,9 +47,6 @@ def calculate_cycles_from_end_date(
     return max(1, weeks)
 
 
-# =========================================================
-# SAMENVATTINGEN / ANALYSE
-# =========================================================
 def build_capacity_summary(conn, planning_df: pd.DataFrame) -> list[dict]:
     if planning_df.empty:
         return []
@@ -88,7 +89,7 @@ def build_capacity_summary(conn, planning_df: pd.DataFrame) -> list[dict]:
             }
         )
 
-    rows.sort(key=lambda r: (str(r["Werkdag_iso"]), str(r["Post"])))
+    rows.sort(key=lambda item: (str(item["Werkdag_iso"]), str(item["Post"])))
     return rows
 
 
@@ -104,6 +105,7 @@ def detect_toestel_conflicten(planning_df: pd.DataFrame) -> tuple[pd.DataFrame, 
     df["Conflict details"] = ""
 
     required_cols = {"Werkdag_iso", "Toestel", "Start", "Einde", "Planning ID", "Taak", "Post"}
+
     if not required_cols.issubset(df.columns):
         return df, []
 
@@ -180,9 +182,6 @@ def detect_toestel_conflicten(planning_df: pd.DataFrame) -> tuple[pd.DataFrame, 
     return df, conflict_summary
 
 
-# =========================================================
-# OVERRIDES
-# =========================================================
 def apply_overrides(planning_df: pd.DataFrame, overrides) -> pd.DataFrame:
     if planning_df.empty or not overrides:
         return planning_df
@@ -232,101 +231,84 @@ def apply_overrides(planning_df: pd.DataFrame, overrides) -> pd.DataFrame:
     return df
 
 
-def reorder_planning_task(conn, planning_id: str, move_after_planning_id: str):
+def reorder_planning_task(
+    conn,
+    planning_id: str,
+    move_after_planning_id: str,
+    planning_run_id: int | None = None,
+):
     set_task_move_after(
         conn=conn,
         planning_id=planning_id,
         target_planning_id=move_after_planning_id,
+        planning_run_id=planning_run_id,
     )
 
     return {"success": True}
 
 
-def move_planning_task(conn, planning_id: str, werkdag_override: str):
-    now = datetime.utcnow().isoformat()
-
-    conn.execute(
-        """
-        INSERT INTO planning_overrides (
-            planning_id,
-            werkdag_override,
-            created_at,
-            updated_at
-        )
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(planning_id) DO UPDATE SET
-            werkdag_override = excluded.werkdag_override,
-            updated_at = excluded.updated_at
-        """,
-        (planning_id, werkdag_override, now, now),
+def move_planning_task(
+    conn,
+    planning_id: str,
+    werkdag_override: str,
+    planning_run_id: int | None = None,
+):
+    set_task_workday_override(
+        conn=conn,
+        planning_id=planning_id,
+        werkdag_override=werkdag_override,
+        planning_run_id=planning_run_id,
     )
 
-    conn.commit()
     return {"success": True}
 
 
-def override_planning_post(conn, planning_id: str, post_override: str):
-    now = datetime.utcnow().isoformat()
-
-    conn.execute(
-        """
-        INSERT INTO planning_overrides (
-            planning_id,
-            post_override,
-            created_at,
-            updated_at
-        )
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(planning_id) DO UPDATE SET
-            post_override = excluded.post_override,
-            updated_at = excluded.updated_at
-        """,
-        (planning_id, post_override, now, now),
+def override_planning_post(
+    conn,
+    planning_id: str,
+    post_override: str,
+    planning_run_id: int | None = None,
+):
+    set_task_post_override(
+        conn=conn,
+        planning_id=planning_id,
+        post_override=post_override,
+        planning_run_id=planning_run_id,
     )
 
-    conn.commit()
     return {"success": True}
 
 
-def lock_planning_task(conn, planning_id: str, locked: bool):
-    now = datetime.utcnow().isoformat()
-
-    conn.execute(
-        """
-        INSERT INTO planning_overrides (
-            planning_id,
-            locked,
-            created_at,
-            updated_at
-        )
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(planning_id) DO UPDATE SET
-            locked = excluded.locked,
-            updated_at = excluded.updated_at
-        """,
-        (planning_id, int(locked), now, now),
+def lock_planning_task(
+    conn,
+    planning_id: str,
+    locked: bool,
+    planning_run_id: int | None = None,
+):
+    set_task_lock(
+        conn=conn,
+        planning_id=planning_id,
+        locked=locked,
+        planning_run_id=planning_run_id,
     )
 
-    conn.commit()
     return {"success": True}
 
 
-def reset_planning_override(conn, planning_id: str):
-    conn.execute(
-        """
-        DELETE FROM planning_overrides
-        WHERE planning_id = ?
-        """,
-        (planning_id,),
+def reset_planning_override(
+    conn,
+    planning_id: str,
+    planning_run_id: int | None = None,
+):
+    clear_task_override(
+        conn=conn,
+        planning_id=planning_id,
+        planning_run_id=planning_run_id,
     )
 
-    conn.commit()
     return {"success": True}
 
 
-# =========================================================
-# PLANNER RUN
-# =========================================================
 def run_planner(payload) -> dict:
     overrides = getattr(payload, "overrides", [])
     menu_rotation = getattr(payload, "menu_rotation", None)
@@ -400,6 +382,7 @@ def run_planner(payload) -> dict:
             planning_naam = f"Planning {payload.start_monday} - {menu_groep or 'alle menu-groepen'}"
 
         description_end_date = getattr(payload, "end_date", None) or "-"
+
         planning_run_id = create_planning_run(
             conn,
             naam=planning_naam,
