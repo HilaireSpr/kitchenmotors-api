@@ -2,6 +2,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
+
 class PlanningOverride(BaseModel):
     planningId: str
     locked: bool = True
@@ -56,8 +57,16 @@ class PlanningStartuurUpdateRequest(BaseModel):
     werkdag: str
     post: str
     starttijd: str
-    
+
+
 class PlanningReorderRequest(BaseModel):
     planning_id: str
     move_after_planning_id: str
     planning_run_id: Optional[int] = None
+
+
+class PlanningDependencyInfo(BaseModel):
+    dependency_status: Optional[Literal["ok", "warning", "blocked"]] = None
+    dependency_warning: Optional[str] = None
+    dependency_previous_task: Optional[str] = None
+    dependency_previous_end: Optional[str] = None

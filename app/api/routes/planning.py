@@ -30,6 +30,7 @@ from app.services.planning_storage import (
     load_planning_df,
     set_active_planning_run,
 )
+from app.services.planning_dependencies import apply_dependency_warnings
 
 router = APIRouter()
 
@@ -89,9 +90,12 @@ def get_planning_run_rows_endpoint(planning_run_id: int):
             planning_run_id=planning_run_id,
         )
 
+        rows = dataframe_to_rows(df)
+        rows = apply_dependency_warnings(rows)
+
         return {
             "success": True,
-            "result": {"rows": dataframe_to_rows(df)},
+            "result": {"rows": rows},
         }
     finally:
         conn.close()
