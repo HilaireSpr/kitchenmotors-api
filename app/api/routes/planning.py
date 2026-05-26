@@ -1,6 +1,6 @@
 import json
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from app.db import get_db_connection
 from app.schemas.planning import (
@@ -45,6 +45,49 @@ def dataframe_to_rows(df):
     json_data = df.to_json(orient="records", date_format="iso")
     return json.loads(json_data)
 
+def get_row_dependency_status(conn, planning_run_id: int, planning_id: str):
+    df = load_planning_df(conn, planning_run_id)
+
+    if df is None or df.empty:
+        return None
+
+    df = apply_planning_overrides(
+        conn=conn,
+        planning_df=df,
+        planning_run_id=planning_run_id,
+    )
+
+    rows = dataframe_to_rows(df)
+    rows = apply_dependency_warnings(rows)
+
+    for row in rows:
+        if row.get("Planning ID") == planning_id:
+            return {
+                "status": row.get("Dependency status"),
+                "warning": row.get("Dependency warning"),
+            }
+
+    return None
+
+
+def assert_task_not_dependency_blocked(conn, planning_run_id: int | None, planning_id: str):
+    if planning_run_id is None:
+        return
+
+    dependency = get_row_dependency_status(
+        conn=conn,
+        planning_run_id=planning_run_id,
+        planning_id=planning_id,
+    )
+
+    if not dependency:
+        return
+
+    if dependency.get("status") == "blocked":
+        raise HTTPException(
+            status_code=400,
+            detail=dependency.get("warning") or "Deze verplaatsing breekt de taakvolgorde.",
+        )
 
 @router.get("/runs")
 def get_planning_runs_endpoint():
@@ -161,6 +204,21 @@ def reorder_planning_task_endpoint(payload: PlanningReorderRequest):
             move_after_planning_id=payload.move_after_planning_id,
             planning_run_id=payload.planning_run_id,
         )
+
+        try:
+            assert_task_not_dependency_blocked(
+                conn=conn,
+                planning_run_id=payload.planning_run_id,
+                planning_id=payload.planning_id,
+            )
+        except HTTPException:
+            reset_planning_override(
+                conn=conn,
+                planning_id=payload.planning_id,
+                planning_run_id=payload.planning_run_id,
+            )
+            raise
+
         return {"success": True, "result": result}
     finally:
         conn.close()
