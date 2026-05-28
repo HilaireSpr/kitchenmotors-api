@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
@@ -11,12 +13,14 @@ GEEN_TOESTEL = "Geen"
 GEEN_POST = "-"
 BREAK_LABEL = "🕒 Pauze"
 
-# 8u werkdag inclusief 30 min pauze = 450 min netto capaciteit
-DEFAULT_CAPACITEIT_MINUTEN = 450
+# 8u werkdag inclusief 30 min pauze = 510 min netto capaciteit
+DEFAULT_CAPACITEIT_MINUTEN = 510
 
 # Pauze-logica
 BREAK_AFTER_ACTIVE_MINUTES = 240
 BREAK_DURATION_MINUTES = 30
+
+TASK_SEQUENCE_RE = re.compile(r"^(.+)_(\d+)$")
 
 
 # =========================================================
@@ -78,6 +82,23 @@ def row_has_key(row: Any, key: str) -> bool:
     except Exception:
         return False
 
+def parse_task_sequence_code(value: str | None) -> tuple[str, int] | None:
+    if not value:
+        return None
+
+    match = TASK_SEQUENCE_RE.match(str(value).strip())
+    if not match:
+        return None
+
+    return match.group(1), int(match.group(2))
+
+
+def get_handeling_task_code(handeling) -> str | None:
+    code = row_get(handeling, "code")
+    if not code:
+        return None
+
+    return str(code).strip()
 
 # =========================================================
 # CAPACITEIT / POSTEN / TOESTELLEN
@@ -592,7 +613,7 @@ def _get_planning_type(handeling) -> str:
     # backward-compatible fallback
     if int(row_get(handeling, "is_vaste_taak", 0) or 0) == 1:
         if int(row_get(handeling, "heeft_vast_startuur", 0) or 0) == 1:
-            return "soft"
+            return "hard"
         return "floating"
 
     return "floating"
@@ -1064,6 +1085,7 @@ def build_planning_df(
     planning_rows: list[dict] = []
     post_states: dict[tuple[str, str], dict] = {}
     toestel_cursors: dict[tuple[str, str], datetime] = {}
+    dependency_end_by_group_step: dict[tuple[str, int], datetime] = {}
 
     for menu_item in menu_items:
         serveerdatum = parse_iso_date(menu_item["serveerdag"])
@@ -1082,6 +1104,23 @@ def build_planning_df(
 
             standaard_post = (h["post"] or GEEN_POST).strip() or GEEN_POST
             gevraagd_toestel = normalize_toestel(h["toestel"])
+            task_code = get_handeling_task_code(h)
+            parsed_task_code = parse_task_sequence_code(task_code)
+
+            dependency_ready_at = None
+            dependency_conflict_reason = ""
+
+            if parsed_task_code:
+                dependency_group, dependency_step = parsed_task_code
+
+                if dependency_step > 1:
+                    previous_key = (dependency_group, dependency_step - 1)
+                    dependency_ready_at = dependency_end_by_group_step.get(previous_key)
+
+                    if dependency_ready_at is None:
+                        dependency_conflict_reason = (
+                            f"Vorige taak {dependency_group}_{dependency_step - 1} nog niet ingepland"
+                        )
 
             planning_id_preview = (
                 f"{menu_item['id']}|{menu_item['serveerdag']}|{menu_item['recept_id']}|{h['id']}|"
@@ -1173,8 +1212,21 @@ def build_planning_df(
             conflict = False
             conflict_reason = ""
 
+            if dependency_conflict_reason:
+                conflict = True
+                conflict_reason = dependency_conflict_reason
+
             if planning_type == "hard" and fixed_start_dt is not None:
                 start_dt = fixed_start_dt
+                if dependency_ready_at is not None and start_dt < dependency_ready_at:
+                    conflict = True
+                    dependency_time = dependency_ready_at.strftime("%H:%M")
+                    dependency_message = f"Dependency pas klaar om {dependency_time}"
+
+                    if conflict_reason:
+                        conflict_reason += " | "
+
+                    conflict_reason += dependency_message
                 gekozen_toestel = GEEN_TOESTEL
 
                 if kandidaat_toestellen:
@@ -1183,7 +1235,11 @@ def build_planning_df(
                 # conflict detectie: post bezet
                 if start_dt < post_state["post_available_at"]:
                     conflict = True
-                    conflict_reason = "Post bezet op hard fixed startuur"
+
+                    if conflict_reason:
+                        conflict_reason += " | "
+
+                    conflict_reason += "Post bezet op hard fixed startuur"
 
                 # conflict detectie: toestel bezet
                 if gekozen_toestel != GEEN_TOESTEL:
@@ -1195,11 +1251,15 @@ def build_planning_df(
                         conflict_reason += "Toestel bezet op hard fixed startuur"
 
             else:
-                earliest_start = (
-                    max(post_state["post_available_at"], fixed_start_dt)
-                    if fixed_start_dt is not None
-                    else post_state["post_available_at"]
-                )
+                earliest_candidates = [post_state["post_available_at"]]
+
+                if fixed_start_dt is not None:
+                    earliest_candidates.append(fixed_start_dt)
+
+                if dependency_ready_at is not None:
+                    earliest_candidates.append(dependency_ready_at)
+
+                earliest_start = max(earliest_candidates)
 
                 if kandidaat_toestellen:
                     gekozen_toestel, start_dt = _choose_best_toestel_start(
@@ -1246,6 +1306,9 @@ def build_planning_df(
                 task_row["Toestel"] = override["toestel_override"]
 
             planning_rows.append(task_row)
+            if parsed_task_code:
+                dependency_group, dependency_step = parsed_task_code
+                dependency_end_by_group_step[(dependency_group, dependency_step)] = eind_dt
 
             post_block_end = start_dt + timedelta(minutes=actieve_tijd)
             post_state["post_available_at"] = post_block_end
@@ -1306,5 +1369,7 @@ def build_planning_df(
         )
 
     planning_df = pd.DataFrame(planning_rows)
-    planning_df = planning_df.sort_values(["Werkdag_iso", "Post", "Start", "Taak"]).reset_index(drop=True)
+    planning_df = planning_df.sort_values(
+        ["Werkdag_iso", "Start", "Post", "Taak"]
+    ).reset_index(drop=True)
     return planning_df
