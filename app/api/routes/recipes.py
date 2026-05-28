@@ -51,6 +51,8 @@ def update_handeling_endpoint(handeling_id: int, payload: HandelingUpdateRequest
             dag_offset_max=payload.max_offset_dagen,
             passieve_tijd=payload.passieve_tijd,
             is_vaste_taak=payload.is_vaste_taak,
+            heeft_vast_startuur=payload.heeft_vast_startuur,
+            vast_startuur=payload.vast_startuur,
         )
 
         if not result:

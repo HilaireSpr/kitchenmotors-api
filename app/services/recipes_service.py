@@ -99,6 +99,8 @@ def get_recipe_detail(conn, recept_code: str) -> dict | None:
             toestel,
             passieve_tijd,
             is_vaste_taak,
+            heeft_vast_startuur,
+            vast_startuur,
             planning_type,
             actief_vanaf,
             actief_tot
@@ -170,7 +172,8 @@ def get_recipe_detail(conn, recept_code: str) -> dict | None:
                 "passieve_tijd": passieve_tijd,
                 "actieve_tijd": actieve_tijd,
                 "totale_duur": actieve_tijd + passieve_tijd,
-                "is_vaste_taak": bool(row["is_vaste_taak"]),
+                "heeft_vast_startuur": bool(row["heeft_vast_startuur"]),
+                "vast_startuur": row["vast_startuur"] or "",
                 "planning_type": _normalize_planning_type(row["planning_type"]),
                 "actief_vanaf": row["actief_vanaf"],
                 "actief_tot": row["actief_tot"],
@@ -198,6 +201,8 @@ def update_handeling(
     dag_offset_max,
     passieve_tijd,
     is_vaste_taak,
+    heeft_vast_startuur=False,
+    vast_startuur=None,
     planning_type=None,
     actief_vanaf=None,
     actief_tot=None,
@@ -233,6 +238,12 @@ def update_handeling(
     dag_offset_value = _to_int(dag_offset, 0)
     dag_offset_min_value = _to_int(dag_offset_min, dag_offset_value)
     dag_offset_max_value = _to_int(dag_offset_max, dag_offset_value)
+    heeft_vast_startuur_value = 1 if heeft_vast_startuur else 0
+    vast_startuur_value = (
+        _normalize_optional_text(vast_startuur)
+        if heeft_vast_startuur_value
+        else None
+    )
 
     conn.execute(
         """
@@ -246,6 +257,8 @@ def update_handeling(
             max_offset_dagen = ?,
             passieve_tijd = ?,
             is_vaste_taak = ?,
+            heeft_vast_startuur = ?,
+            vast_startuur = ?,
             planning_type = ?,
             actief_vanaf = ?,
             actief_tot = ?
@@ -260,6 +273,8 @@ def update_handeling(
             dag_offset_max_value,
             _to_int(passieve_tijd, 0),
             1 if is_vaste_taak else 0,
+            heeft_vast_startuur_value,
+            vast_startuur_value,
             normalized_planning_type,
             normalized_actief_vanaf,
             normalized_actief_tot,
@@ -282,6 +297,8 @@ def update_handeling(
             toestel,
             passieve_tijd,
             is_vaste_taak,
+            heeft_vast_startuur,
+            vast_startuur,
             planning_type,
             actief_vanaf,
             actief_tot
@@ -308,6 +325,8 @@ def update_handeling(
         "dag_offset_max": dag_offset_max_value,
         "passieve_tijd": updated["passieve_tijd"],
         "is_vaste_taak": bool(updated["is_vaste_taak"]),
+        "heeft_vast_startuur": bool(updated["heeft_vast_startuur"]),
+        "vast_startuur": updated["vast_startuur"],
         "planning_type": _normalize_planning_type(updated["planning_type"]),
         "actief_vanaf": updated["actief_vanaf"],
         "actief_tot": updated["actief_tot"],
