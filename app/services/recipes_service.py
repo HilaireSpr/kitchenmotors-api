@@ -189,6 +189,201 @@ def get_recipe_detail(conn, recept_code: str) -> dict | None:
         "handelingen": handelingen,
     }
 
+def create_recipe(
+    conn,
+    code: str,
+    naam: str,
+    categorie=None,
+    menu_groep=None,
+):
+    conn.execute(
+        """
+        INSERT INTO recepten (
+            code,
+            naam,
+            categorie
+        )
+        VALUES (?, ?, ?)
+        """,
+        (
+            code.strip(),
+            naam.strip(),
+            _normalize_optional_text(categorie),
+        ),
+    )
+
+    conn.commit()
+
+    recipe = conn.execute(
+        """
+        SELECT
+            id,
+            code,
+            naam,
+            categorie
+        FROM recepten
+        WHERE code = ?
+        """,
+        (code.strip(),),
+    ).fetchone()
+
+    return {
+        "recept_id": recipe["id"],
+        "recept_code": recipe["code"],
+        "recept_naam": recipe["naam"],
+        "categorie": recipe["categorie"],
+    }
+
+def create_handeling(
+    conn,
+    recept_id: int,
+    code: str,
+    naam: str,
+    post=None,
+    toestel=None,
+    dag_offset=0,
+    dag_offset_min=0,
+    dag_offset_max=0,
+    passieve_tijd=0,
+    is_vaste_taak=False,
+    heeft_vast_startuur=False,
+    vast_startuur=None,
+    planning_type=None,
+    actief_vanaf=None,
+    actief_tot=None,
+):
+    recipe = conn.execute(
+        """
+        SELECT id
+        FROM recepten
+        WHERE id = ?
+        """,
+        (recept_id,),
+    ).fetchone()
+
+    if not recipe:
+        return None
+
+    next_sort_order = conn.execute(
+        """
+        SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_order
+        FROM handelingen
+        WHERE recept_id = ?
+        """,
+        (recept_id,),
+    ).fetchone()["next_order"]
+
+    conn.execute(
+        """
+        INSERT INTO handelingen (
+            recept_id,
+            code,
+            naam,
+            sort_order,
+            post,
+            toestel,
+            dag_offset,
+            min_offset_dagen,
+            max_offset_dagen,
+            passieve_tijd,
+            is_vaste_taak,
+            heeft_vast_startuur,
+            vast_startuur,
+            planning_type,
+            actief_vanaf,
+            actief_tot
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            recept_id,
+            code.strip(),
+            naam.strip(),
+            next_sort_order,
+            _normalize_optional_text(post),
+            _normalize_optional_text(toestel),
+            _to_int(dag_offset, 0),
+            _to_int(dag_offset_min, 0),
+            _to_int(dag_offset_max, 0),
+            _to_int(passieve_tijd, 0),
+            1 if is_vaste_taak else 0,
+            1 if heeft_vast_startuur else 0,
+            _normalize_optional_text(vast_startuur),
+            _normalize_planning_type(planning_type),
+            _normalize_optional_text(actief_vanaf),
+            _normalize_optional_text(actief_tot),
+        ),
+    )
+
+    conn.commit()
+
+    handeling_id = conn.execute(
+        "SELECT last_insert_rowid()"
+    ).fetchone()[0]
+
+    return {
+        "handeling_id": handeling_id,
+        "handeling_code": code,
+        "handeling_naam": naam,
+    }
+
+def create_stap(
+    conn,
+    handeling_id: int,
+    naam: str,
+    tijd: int,
+):
+    handeling = conn.execute(
+        """
+        SELECT id
+        FROM handelingen
+        WHERE id = ?
+        """,
+        (handeling_id,),
+    ).fetchone()
+
+    if not handeling:
+        return None
+
+    next_sort_order = conn.execute(
+        """
+        SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_order
+        FROM stappen
+        WHERE handeling_id = ?
+        """,
+        (handeling_id,),
+    ).fetchone()["next_order"]
+
+    conn.execute(
+        """
+        INSERT INTO stappen (
+            handeling_id,
+            naam,
+            tijd,
+            sort_order
+        )
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            handeling_id,
+            naam.strip(),
+            _to_int(tijd, 0),
+            next_sort_order,
+        ),
+    )
+
+    conn.commit()
+
+    stap_id = conn.execute(
+        "SELECT last_insert_rowid()"
+    ).fetchone()[0]
+
+    return {
+        "stap_id": stap_id,
+        "stap_naam": naam,
+        "stap_tijd": tijd,
+        "stap_volgorde": next_sort_order,
+    }
 
 def update_handeling(
     conn,

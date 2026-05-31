@@ -1,6 +1,7 @@
-from pydantic import BaseModel
-from typing import Optional
 from datetime import date
+from typing import Optional
+
+from pydantic import BaseModel
 
 
 # =========================================================
@@ -16,6 +17,13 @@ class RecipeBase(BaseModel):
 
 class RecipeCreate(RecipeBase):
     pass
+
+
+class RecipeCreateRequest(BaseModel):
+    code: str
+    naam: str
+    categorie: Optional[str] = None
+    menu_groep: Optional[str] = None
 
 
 class RecipeUpdate(BaseModel):
@@ -34,27 +42,49 @@ class RecipeResponse(RecipeBase):
 
 
 # =========================================================
-# HANDELINGEN (🔥 BELANGRIJK VOOR PLANNER)
+# HANDELINGEN
 # =========================================================
+class HandelingBase(BaseModel):
+    code: str
+    naam: str
+    post: Optional[str] = None
+    toestel: Optional[str] = None
+
+    dag_offset: int = 0
+    min_offset_dagen: Optional[int] = 0
+    max_offset_dagen: Optional[int] = 0
+
+    passieve_tijd: Optional[int] = 0
+
+    is_vaste_taak: Optional[bool] = False
+    heeft_vast_startuur: Optional[bool] = False
+    vast_startuur: Optional[str] = None
+
+    planning_type: Optional[str] = "floating"
+    actief_vanaf: Optional[date] = None
+    actief_tot: Optional[date] = None
+
+
+class HandelingCreateRequest(HandelingBase):
+    pass
+
+
 class HandelingUpdateRequest(BaseModel):
     naam: str
     post: Optional[str] = None
     toestel: Optional[str] = None
 
     dag_offset: int
-    passieve_tijd: Optional[int] = 0
-
-    is_vaste_taak: Optional[bool] = False
-
-    # bestaande velden (die je al gebruikt in planning.py)
     min_offset_dagen: Optional[int] = None
     max_offset_dagen: Optional[int] = None
 
-    heeft_vast_startuur: Optional[bool] = False
-    vast_startuur: Optional[str] = None  # "HH:MM"
+    passieve_tijd: Optional[int] = 0
 
-    # 🔥 NIEUWE VELDEN (jouw upgrade)
-    planning_type: Optional[str] = "floating"   # hard | soft | floating
+    is_vaste_taak: Optional[bool] = False
+    heeft_vast_startuur: Optional[bool] = False
+    vast_startuur: Optional[str] = None
+
+    planning_type: Optional[str] = "floating"
     actief_vanaf: Optional[date] = None
     actief_tot: Optional[date] = None
 
@@ -62,6 +92,11 @@ class HandelingUpdateRequest(BaseModel):
 # =========================================================
 # STAPPEN
 # =========================================================
+class StapCreateRequest(BaseModel):
+    naam: str
+    tijd: int = 0
+
+
 class StapUpdateRequest(BaseModel):
     naam: str
     tijd: int

@@ -1,13 +1,22 @@
 from fastapi import APIRouter, HTTPException
 
 from app.db import get_db_connection
-from app.schemas.recipes import HandelingUpdateRequest
+from app.schemas.recipes import (
+    HandelingCreateRequest,
+    HandelingUpdateRequest,
+    RecipeCreateRequest,
+    StapCreateRequest,
+    StapUpdateRequest,
+)
 from app.services.recipes_service import (
+    create_handeling,
+    create_recipe,
+    create_stap,
     get_recipes,
     get_recipe_detail,
     update_handeling,
+    update_stap,
 )
-from app.schemas.recipes import StapUpdateRequest
 from app.services.recipes_service import update_stap
 
 router = APIRouter()
@@ -22,6 +31,71 @@ def list_recipes():
     finally:
         conn.close()
 
+@router.post("")
+def create_recipe_endpoint(payload: RecipeCreateRequest):
+    conn = get_db_connection()
+    try:
+        result = create_recipe(
+            conn=conn,
+            code=payload.code,
+            naam=payload.naam,
+            categorie=payload.categorie,
+            menu_groep=payload.menu_groep,
+        )
+
+        return {"success": True, "result": result}
+    finally:
+        conn.close()
+
+
+@router.post("/{recept_id}/handelingen")
+def create_handeling_endpoint(recept_id: int, payload: HandelingCreateRequest):
+    conn = get_db_connection()
+    try:
+        result = create_handeling(
+            conn=conn,
+            recept_id=recept_id,
+            code=payload.code,
+            naam=payload.naam,
+            post=payload.post,
+            toestel=payload.toestel,
+            dag_offset=payload.dag_offset,
+            dag_offset_min=payload.min_offset_dagen,
+            dag_offset_max=payload.max_offset_dagen,
+            passieve_tijd=payload.passieve_tijd,
+            is_vaste_taak=payload.is_vaste_taak,
+            heeft_vast_startuur=payload.heeft_vast_startuur,
+            vast_startuur=payload.vast_startuur,
+            planning_type=payload.planning_type,
+            actief_vanaf=payload.actief_vanaf,
+            actief_tot=payload.actief_tot,
+        )
+
+        if not result:
+            raise HTTPException(status_code=404, detail="Recept niet gevonden")
+
+        return {"success": True, "result": result}
+    finally:
+        conn.close()
+
+
+@router.post("/handelingen/{handeling_id}/stappen")
+def create_stap_endpoint(handeling_id: int, payload: StapCreateRequest):
+    conn = get_db_connection()
+    try:
+        result = create_stap(
+            conn=conn,
+            handeling_id=handeling_id,
+            naam=payload.naam,
+            tijd=payload.tijd,
+        )
+
+        if not result:
+            raise HTTPException(status_code=404, detail="Handeling niet gevonden")
+
+        return {"success": True, "result": result}
+    finally:
+        conn.close()
 
 @router.get("/{recept_code}")
 def get_recipe_detail_endpoint(recept_code: str):

@@ -100,6 +100,16 @@ def get_handeling_task_code(handeling) -> str | None:
 
     return str(code).strip()
 
+def get_dependency_step_sort_key(handeling):
+    task_code = get_handeling_task_code(handeling)
+    parsed = parse_task_sequence_code(task_code)
+
+    if not parsed:
+        return (9999, task_code or "")
+
+    _, step = parsed
+    return (step, task_code)
+
 # =========================================================
 # CAPACITEIT / POSTEN / TOESTELLEN
 # =========================================================
@@ -795,6 +805,7 @@ def _score_candidate_day(
     offset: int,
     heeft_vast_startuur,
     vast_startuur,
+    dependency_ready_at,
 ):
     werkdag = serveerdatum + timedelta(days=offset)
     werkdag_str = werkdag.isoformat()
@@ -810,8 +821,15 @@ def _score_candidate_day(
     )["post_available_at"]
 
     fixed_start_dt = _get_fixed_start_dt(werkdag, heeft_vast_startuur, vast_startuur)
-    earliest_start = max(post_available_at, fixed_start_dt) if fixed_start_dt is not None else post_available_at
+    earliest_candidates = [post_available_at]
 
+    if fixed_start_dt is not None:
+        earliest_candidates.append(fixed_start_dt)
+
+    if dependency_ready_at is not None:
+        earliest_candidates.append(dependency_ready_at)
+
+    earliest_start = max(earliest_candidates)
     kandidaat_toestellen = _match_toestel_candidates(gevraagd_toestel, alle_toestellen)
 
     if kandidaat_toestellen:
@@ -939,6 +957,7 @@ def _choose_best_offset_day(
     max_offset: int,
     heeft_vast_startuur,
     vast_startuur,
+    dependency_ready_at=None,
 ) -> tuple[date, str, dict]:
     if min_offset > max_offset:
         min_offset, max_offset = max_offset, min_offset
@@ -960,6 +979,7 @@ def _choose_best_offset_day(
             offset=offset,
             heeft_vast_startuur=heeft_vast_startuur,
             vast_startuur=vast_startuur,
+            dependency_ready_at=dependency_ready_at,
         )
         candidate_debugs.append(debug)
 
@@ -1095,6 +1115,15 @@ def build_planning_df(
             h for h in handelingen
             if _is_handeling_active_for_serveerdatum(h, serveerdatum)
         ]
+
+        handelingen = sorted(
+            handelingen,
+            key=lambda h: (
+                int(row_get(h, "dag_offset", 0) or 0),
+                get_dependency_step_sort_key(h),
+                row_get(h, "sort_order", 0),
+            ),
+        )
 
         for h in handelingen:
             planning_type = _get_planning_type(h)
