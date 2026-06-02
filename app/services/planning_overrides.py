@@ -302,6 +302,21 @@ def set_task_post_override(conn, planning_id: str, post_override: str | None, pl
         move_after_planning_id=existing["move_after_planning_id"] if existing else None,
     )
 
+def set_task_toestel_override(conn, planning_id: str, toestel_override: str | None, planning_run_id=None):
+    existing = get_override_for_planning_id(conn, planning_id, planning_run_id)
+
+    upsert_planning_override(
+        conn,
+        planning_id=planning_id,
+        planning_run_id=planning_run_id,
+        start_offset_minutes=int(existing["start_offset_minutes"] or 0) if existing else 0,
+        post_override=existing["post_override"] if existing else None,
+        toestel_override=toestel_override,
+        werkdag_override=existing["werkdag_override"] if existing else None,
+        locked=int(existing["locked"] or 0) if existing else 0,
+        move_before_planning_id=existing["move_before_planning_id"] if existing else None,
+        move_after_planning_id=existing["move_after_planning_id"] if existing else None,
+    )
 
 def set_task_toestel_override(conn, planning_id: str, toestel_override: str | None, planning_run_id=None):
     existing = get_override_for_planning_id(conn, planning_id, planning_run_id)

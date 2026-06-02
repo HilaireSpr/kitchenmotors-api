@@ -17,6 +17,7 @@ from app.services.planning_overrides import (
     set_task_move_after,
     set_task_post_override,
     set_task_workday_override,
+    set_task_toestel_override,
 )
 from app.services.planning_storage import create_planning_run, save_planning_df
 
@@ -278,6 +279,20 @@ def override_planning_post(
 
     return {"success": True}
 
+def override_planning_toestel(
+    conn,
+    planning_id: str,
+    toestel_override: str,
+    planning_run_id: int | None = None,
+):
+    set_task_toestel_override(
+        conn=conn,
+        planning_id=planning_id,
+        toestel_override=toestel_override,
+        planning_run_id=planning_run_id,
+    )
+
+    return {"success": True}
 
 def lock_planning_task(
     conn,

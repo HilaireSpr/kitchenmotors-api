@@ -656,10 +656,6 @@ def _match_toestel_candidates(gevraagd_toestel: str, alle_toestellen: list[str])
 
     gevraagd_lower = gevraagd_toestel.lower()
 
-    exact = [t for t in alle_toestellen if t.lower() == gevraagd_lower]
-    if exact:
-        return exact
-
     prefix_matches = []
     for t in alle_toestellen:
         t_lower = t.lower()
@@ -670,8 +666,14 @@ def _match_toestel_candidates(gevraagd_toestel: str, alle_toestellen: list[str])
         ):
             prefix_matches.append(t)
 
-    return prefix_matches if prefix_matches else [gevraagd_toestel]
+    if prefix_matches:
+        return sorted(prefix_matches)
 
+    exact = [t for t in alle_toestellen if t.lower() == gevraagd_lower]
+    if exact:
+        return sorted(exact)
+
+    return [gevraagd_toestel]
 
 def _choose_best_toestel_start(
     kandidaat_toestellen: list[str],
@@ -1259,7 +1261,14 @@ def build_planning_df(
                 gekozen_toestel = GEEN_TOESTEL
 
                 if kandidaat_toestellen:
-                    gekozen_toestel = kandidaat_toestellen[0]
+                    gekozen_toestel, _ = _choose_best_toestel_start(
+                        kandidaat_toestellen=kandidaat_toestellen,
+                        toestel_cursors={
+                            t: toestel_cursors.get((werkdag_str, t), datetime.combine(werkdag, time(0, 0)))
+                            for t in kandidaat_toestellen
+                        },
+                        earliest_start=start_dt,
+                    )
 
                 # conflict detectie: post bezet
                 if start_dt < post_state["post_available_at"]:

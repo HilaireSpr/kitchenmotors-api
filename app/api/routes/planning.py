@@ -10,6 +10,7 @@ from app.schemas.planning import (
     PlanningRequest,
     PlanningResetRequest,
     PlanningReorderRequest,
+    PlanningToestelOverrideRequest,
 )
 from app.services.planner_service import (
     lock_planning_task,
@@ -18,6 +19,7 @@ from app.services.planner_service import (
     reorder_planning_task,
     reset_planning_override,
     run_planner,
+    override_planning_toestel,
 )
 from app.services.planning_overrides import (
     apply_planning_overrides,
@@ -193,6 +195,19 @@ def override_planning_post_endpoint(payload: PlanningPostOverrideRequest):
     finally:
         conn.close()
 
+@router.post("/override/toestel")
+def override_planning_toestel_endpoint(payload: PlanningToestelOverrideRequest):
+    conn = get_db_connection()
+    try:
+        result = override_planning_toestel(
+            conn=conn,
+            planning_id=payload.planning_id,
+            toestel_override=payload.toestel_override,
+            planning_run_id=payload.planning_run_id,
+        )
+        return {"success": True, "result": result}
+    finally:
+        conn.close()
 
 @router.post("/override/reorder")
 def reorder_planning_task_endpoint(payload: PlanningReorderRequest):

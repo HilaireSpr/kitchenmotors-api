@@ -70,3 +70,8 @@ class PlanningDependencyInfo(BaseModel):
     dependency_warning: Optional[str] = None
     dependency_previous_task: Optional[str] = None
     dependency_previous_end: Optional[str] = None
+
+class PlanningToestelOverrideRequest(BaseModel):
+    planning_id: str
+    toestel_override: str
+    planning_run_id: Optional[int] = None
