@@ -859,7 +859,7 @@ def _score_candidate_day(
 
     toestel_score = toestel_penalty_minutes * 3
     post_score = post_penalty_minutes * 2
-    load_score = int(post_load / 10)
+    load_score = int(post_load / 3)
 
     if afstand_tot_voorkeur == 0:
         voorkeur_score = 0
@@ -933,7 +933,7 @@ def _format_candidate_debug(candidate_debugs: list[dict]) -> str:
 
     for d in candidate_debugs:
         part = (
-            f"{d['werkdag']} (off {d['offset']}): "
+            f"{d['werkdag']} / {d.get('post', '-')} (off {d['offset']}): "
             f"score={d['score_tuple']}, "
             f"load={d['post_load']}, "
             f"toestel={d['toestel_penalty_minutes']}m, "
@@ -1069,6 +1069,137 @@ def _build_task_row(
 # =========================================================
 # PLANNING OPBOUWEN
 # =========================================================
+def get_task_group_key(task_code: str | None) -> str | None:
+    if not task_code:
+        return None
+
+    parts = task_code.split("_")
+
+    if len(parts) < 4:
+        return None
+
+    return "_".join(parts[:-1])
+
+def get_task_group_day_key(task_code: str | None, min_offset: int, max_offset: int):
+    if not task_code:
+        return None
+
+    parts = task_code.split("_")
+
+    if len(parts) < 4:
+        return None
+
+    group_key = "_".join(parts[:-1])
+
+    return f"{group_key}|{min_offset}|{max_offset}"
+
+
+def _get_candidate_posts(preferred_post: str, all_posts: list[str]) -> list[str]:
+    preferred_post = (preferred_post or GEEN_POST).strip() or GEEN_POST
+    real_posts = [p for p in all_posts if p and p != GEEN_POST]
+
+    if not real_posts:
+        return [preferred_post]
+
+    candidates: list[str] = []
+
+    if preferred_post in real_posts:
+        candidates.append(preferred_post)
+
+    for post in real_posts:
+        if post not in candidates:
+            candidates.append(post)
+
+    return candidates
+
+
+def _choose_best_post_and_offset_day(
+    planning_rows: list[dict],
+    post_states: dict,
+    toestel_cursors: dict,
+    starturen_map: dict,
+    alle_toestellen: list[str],
+    kandidaat_posten: list[str],
+    gevraagd_toestel: str,
+    serveerdatum: date,
+    preferred_post: str,
+    preferred_offset: int,
+    min_offset: int,
+    max_offset: int,
+    heeft_vast_startuur,
+    vast_startuur,
+    dependency_ready_at=None,
+) -> tuple[str, date, str, dict]:
+    if min_offset > max_offset:
+        min_offset, max_offset = max_offset, min_offset
+
+    kandidaten = list(range(min_offset, max_offset + 1))
+    candidate_debugs: list[dict] = []
+
+    for post in kandidaat_posten:
+        for offset in kandidaten:
+            base_score, debug = _score_candidate_day(
+                planning_rows=planning_rows,
+                post_states=post_states,
+                toestel_cursors=toestel_cursors,
+                starturen_map=starturen_map,
+                alle_toestellen=alle_toestellen,
+                gevraagd_toestel=gevraagd_toestel,
+                serveerdatum=serveerdatum,
+                post=post,
+                preferred_offset=preferred_offset,
+                offset=offset,
+                heeft_vast_startuur=heeft_vast_startuur,
+                vast_startuur=vast_startuur,
+                dependency_ready_at=dependency_ready_at,
+            )
+
+            post_preference_score = 0 if post == preferred_post else 25
+
+            final_score = (
+                debug["toestel_blokkade"],
+                debug["post_blokkade"],
+                debug["load_score"],
+                debug["toestel_score"],
+                debug["post_score"],
+                post_preference_score,
+                debug["voorkeur_score"],
+                offset,
+                post,
+            )
+
+            debug = {
+                **debug,
+                "post": post,
+                "preferred_post": preferred_post,
+                "post_preference_score": post_preference_score,
+                "score_tuple": final_score,
+            }
+            candidate_debugs.append(debug)
+
+    best_debug = min(candidate_debugs, key=lambda d: d["score_tuple"])
+    beste_offset = best_debug["offset"]
+    beste_post = best_debug["post"]
+    beste_dag = serveerdatum + timedelta(days=beste_offset)
+
+    reason = _build_reason_summary(best_debug, preferred_offset)
+    if beste_post != preferred_post:
+        reason = f"post gebalanceerd naar {beste_post} i.p.v. {preferred_post} | {reason}"
+
+    decision_debug = {
+        "preferred_offset": preferred_offset,
+        "min_offset": min_offset,
+        "max_offset": max_offset,
+        "chosen_offset": beste_offset,
+        "chosen_werkdag": beste_dag.isoformat(),
+        "chosen_score": str(best_debug["score_tuple"]),
+        "reason_summary": reason,
+        "candidate_debugs": candidate_debugs,
+        "candidate_debug_text": _format_candidate_debug(candidate_debugs),
+    }
+
+    return beste_post, beste_dag, beste_dag.isoformat(), decision_debug
+
 def build_planning_df(
     conn,
     start_monday: str,
@@ -1078,6 +1209,8 @@ def build_planning_df(
 ):
     starturen_map = get_planning_starturen(conn)
     alle_toestellen = get_toestellen(conn)
+    post_capaciteiten = get_post_capaciteiten(conn)
+    alle_posten = sorted([post for post in post_capaciteiten.keys() if post and post != GEEN_POST])
 
     raw_menu_items = _get_menu_items(conn, menu_groep=menu_groep)
     menu_items = expand_menu_items(
@@ -1108,6 +1241,7 @@ def build_planning_df(
     post_states: dict[tuple[str, str], dict] = {}
     toestel_cursors: dict[tuple[str, str], datetime] = {}
     dependency_end_by_group_step: dict[tuple[str, int], datetime] = {}
+    task_group_workdays: dict[str, tuple[date, str]] = {}
 
     for menu_item in menu_items:
         serveerdatum = parse_iso_date(menu_item["serveerdag"])
@@ -1137,6 +1271,12 @@ def build_planning_df(
             gevraagd_toestel = normalize_toestel(h["toestel"])
             task_code = get_handeling_task_code(h)
             parsed_task_code = parse_task_sequence_code(task_code)
+            task_group_key = get_task_group_key(task_code)
+            task_group_day_key = get_task_group_day_key(
+                task_code=task_code,
+                min_offset=min_offset,
+                max_offset=max_offset,
+            )
 
             dependency_ready_at = None
             dependency_conflict_reason = ""
@@ -1161,7 +1301,24 @@ def build_planning_df(
 
             post = override["post_override"] if override and override.get("post_override") else standaard_post
 
-            if override and override.get("werkdag_override"):
+            if (
+                task_group_day_key
+                and task_group_day_key in task_group_workdays
+                and not (override and override.get("werkdag_override"))
+            ):
+                werkdag, werkdag_str = task_group_workdays[task_group_day_key]
+
+                planner_debug = {
+                    "preferred_offset": preferred_offset,
+                    "min_offset": min_offset,
+                    "max_offset": max_offset,
+                    "chosen_offset": None,
+                    "chosen_score": "0",
+                    "reason_summary": f"Zelfde productiegroep: dag geërfd van {task_group_day_key}",
+                    "candidate_debug_text": "Dag gekozen op groepsniveau. Deze taak volgt dezelfde groep.",
+                }
+
+            elif override and override.get("werkdag_override"):
                 werkdag_str = override["werkdag_override"]
                 werkdag = parse_iso_date(werkdag_str)
 
@@ -1195,40 +1352,49 @@ def build_planning_df(
                 }
 
             elif planning_type == "soft":
-                werkdag, werkdag_str, planner_debug = _choose_best_offset_day(
+                kandidaat_posten = _get_candidate_posts(post, alle_posten)
+                post, werkdag, werkdag_str, planner_debug = _choose_best_post_and_offset_day(
                     planning_rows=planning_rows,
                     post_states=post_states,
                     toestel_cursors=toestel_cursors,
                     starturen_map=starturen_map,
                     alle_toestellen=alle_toestellen,
+                    kandidaat_posten=kandidaat_posten,
                     gevraagd_toestel=gevraagd_toestel,
                     serveerdatum=serveerdatum,
-                    post=post,
+                    preferred_post=post,
                     preferred_offset=preferred_offset,
                     min_offset=min_offset,
                     max_offset=max_offset,
                     heeft_vast_startuur=h["heeft_vast_startuur"],
                     vast_startuur=h["vast_startuur"],
+                    dependency_ready_at=dependency_ready_at,
                 )
                 planner_debug["reason_summary"] = f"Soft fixed: {planner_debug['reason_summary']}"
 
             else:
-                werkdag, werkdag_str, planner_debug = _choose_best_offset_day(
+                kandidaat_posten = _get_candidate_posts(post, alle_posten)
+                post, werkdag, werkdag_str, planner_debug = _choose_best_post_and_offset_day(
                     planning_rows=planning_rows,
                     post_states=post_states,
                     toestel_cursors=toestel_cursors,
                     starturen_map=starturen_map,
                     alle_toestellen=alle_toestellen,
+                    kandidaat_posten=kandidaat_posten,
                     gevraagd_toestel=gevraagd_toestel,
                     serveerdatum=serveerdatum,
-                    post=post,
+                    preferred_post=post,
                     preferred_offset=preferred_offset,
                     min_offset=min_offset,
                     max_offset=max_offset,
                     heeft_vast_startuur=0,
                     vast_startuur="",
+                    dependency_ready_at=dependency_ready_at,
                 )
                 planner_debug["reason_summary"] = f"Floating: {planner_debug['reason_summary']}"
+
+            if task_group_day_key and task_group_day_key not in task_group_workdays:
+                task_group_workdays[task_group_day_key] = (werkdag, werkdag_str)
 
             starttijd = _get_post_starttijd(starturen_map, werkdag_str, post)
             post_state = _get_post_state(post_states, werkdag, werkdag_str, post, starttijd)

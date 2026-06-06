@@ -778,3 +778,17 @@ def migrate_handelingen_table(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "handelingen", "planning_type", "TEXT DEFAULT 'floating'")
     ensure_column(conn, "handelingen", "actief_vanaf", "TEXT")
     ensure_column(conn, "handelingen", "actief_tot", "TEXT")
+
+    ensure_column(
+        conn,
+        "handelingen",
+        "post_policy",
+        "TEXT DEFAULT 'flexible'"
+    )
+
+    ensure_column(
+        conn,
+        "handelingen",
+        "alternatieve_posten",
+        "TEXT"
+    )
