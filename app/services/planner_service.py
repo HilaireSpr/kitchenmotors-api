@@ -62,16 +62,18 @@ def build_capacity_summary(conn, planning_df: pd.DataFrame) -> list[dict]:
         return []
 
     grouped = (
-        task_df.groupby(["Werkdag_iso", "Werkdag", "Post"], dropna=False)["Totale duur"]
+        task_df.groupby(
+            ["Werkdag_iso", "Werkdag", "Post"],
+            dropna=False
+        )["Actieve tijd"]
         .sum()
         .reset_index()
     )
-
     rows: list[dict] = []
 
     for _, row in grouped.iterrows():
         post = row["Post"]
-        totale_minuten = int(row["Totale duur"] or 0)
+        totale_minuten = int(row["Actieve tijd"] or 0)
         capaciteit_minuten = int(post_capaciteiten.get(post, 0) or 0)
 
         belasting_pct = None

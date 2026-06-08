@@ -83,23 +83,46 @@ def row_has_key(row: Any, key: str) -> bool:
         return False
 
 def parse_task_sequence_code(value: str | None) -> tuple[str, int] | None:
+    """
+    Parseert KitchenMotors taakcodes naar:
+    (productiepakket/subgroep, volgnummer)
+
+    Ondersteunde vormen:
+
+    1. Met subgroep:
+       PAZO_1_ZE_1 -> ("PAZO_1_ZE", 1)
+       PAZO_1_ZE_10 -> ("PAZO_1_ZE", 10)
+
+    2. Zonder subgroep:
+       GG14_1 -> ("GG14", 1)
+       GG14_10 -> ("GG14", 10)
+       SR_2 -> ("SR", 2)
+       PO_3 -> ("PO", 3)
+       KE_4 -> ("KE", 4)
+       RE_5 -> ("RE", 5)
+
+    3. Groepscode zonder expliciet volgnummer:
+       PAZO_1_ZE -> ("PAZO_1_ZE", 1)
+    """
     if not value:
         return None
 
     task_code = str(value).strip()
     parts = task_code.split("_")
 
-    # PAZO_1_SA = stap 1 van groep PAZO_1_SA
+    # Algemene regel:
+    # Als het laatste deel numeriek is, is dat altijd het volgnummer.
+    # De groep is alles daarvoor.
+    if len(parts) >= 2 and parts[-1].isdigit():
+        group = "_".join(parts[:-1])
+        step = int(parts[-1])
+        return group, step
+
+    # Backward-compatible regel voor subgroepcodes zonder expliciet volgnummer.
     if len(parts) == 3:
         return task_code, 1
 
-    # PAZO_1_SA_2 = stap 2 van groep PAZO_1_SA
-    match = TASK_SEQUENCE_RE.match(task_code)
-    if not match:
-        return None
-
-    return match.group(1), int(match.group(2))
-
+    return None
 
 def get_handeling_task_code(handeling) -> str | None:
     code = row_get(handeling, "code")
@@ -806,10 +829,25 @@ def _get_post_state(
 
 
 def _calculate_day_post_load(planning_rows: list[dict], werkdag_str: str, post: str) -> int:
+    """
+    Capaciteitsbelasting per post.
+
+    Belangrijk:
+    - actieve tijd belast post/medewerker
+    - passieve tijd belast geen postcapaciteit
+    - pauzes tellen niet als actieve productietijd
+    """
     total = 0
+
     for row in planning_rows:
-        if row.get("Werkdag_iso") == werkdag_str and row.get("Post") == post:
-            total += int(row.get("Totale duur", 0) or 0)
+        if row.get("Werkdag_iso") != werkdag_str:
+            continue
+
+        if row.get("Post") != post:
+            continue
+
+        total += int(row.get("Actieve tijd", 0) or 0)
+
     return total
 
 
@@ -1089,23 +1127,13 @@ def _build_task_row(
 # PLANNING OPBOUWEN
 # =========================================================
 def get_task_group_key(task_code: str | None) -> str | None:
-    if not task_code:
+    parsed = parse_task_sequence_code(task_code)
+
+    if not parsed:
         return None
 
-    task_code = str(task_code).strip()
-    parts = task_code.split("_")
-
-    # Voor codes zoals PAZO_1_SA
-    # Dit is al een groepscode zonder volgnummer.
-    if len(parts) == 3:
-        return task_code
-
-    # Voor codes zoals PAZO_1_SA_2
-    # Laatste deel is volgnummer, dus groep is PAZO_1_SA.
-    if len(parts) >= 4 and parts[-1].isdigit():
-        return "_".join(parts[:-1])
-
-    return None
+    group_key, _step = parsed
+    return group_key
 
 def get_task_group_day_key(
     task_code: str | None,
@@ -1400,13 +1428,16 @@ def _build_package_id(menu_item, package_code: str) -> str:
 
 def _get_task_package_code(handeling) -> str:
     task_code = get_handeling_task_code(handeling)
-    group_key = get_task_group_key(task_code)
-    if group_key:
+
+    parsed = parse_task_sequence_code(task_code)
+    if parsed:
+        group_key, _step = parsed
         return group_key
+
     if task_code:
         return task_code
-    return f"handeling_{handeling['id']}"
 
+    return f"handeling_{handeling['id']}"
 
 def _prepare_handeling_runtime(conn, menu_item, handeling, override_map: dict) -> dict:
     preferred_offset, min_offset, max_offset = _get_offset_window(handeling)
@@ -1583,15 +1614,24 @@ def _score_package_candidate(
     fixed_violation_count = 0
     preference_distance = 0
     wait_minutes = 0
+    non_preferred_post_count = 0
 
     for task in package["tasks"]:
         override = task.get("override")
         if override and override.get("werkdag_override"):
             continue
 
-        task_post, fragmented = _choose_task_post_from_package(task, package_post, alle_posten)
+        task_post, fragmented = _choose_task_post_from_package(
+            task,
+            package_post,
+            alle_posten,
+        )
+
         if fragmented:
             fragmentation_count += 1
+
+        if task_post != task["standaard_post"]:
+            non_preferred_post_count += 1
 
         active_by_post[task_post] = active_by_post.get(task_post, 0) + int(task["actieve_tijd"] or 0)
 
@@ -1606,41 +1646,97 @@ def _score_package_candidate(
         starttijd = _get_post_starttijd(starturen_map, werkdag_str, task_post)
         default_start = datetime.combine(werkdag, starttijd)
         state = post_states.get((werkdag_str, task_post))
+
         if state:
-            wait_minutes += max(0, int((state["post_available_at"] - default_start).total_seconds() // 60))
+            wait_minutes += max(
+                0,
+                int((state["post_available_at"] - default_start).total_seconds() // 60),
+            )
 
     over_capacity_minutes = 0
+    overload_penalty = 0
+    high_load_penalty = 0
     projected_ratio_points = 0
+    projected_load_debug: dict[str, dict] = {}
 
     for post, active_minutes in active_by_post.items():
         existing = _calculate_active_day_post_load(planning_rows, werkdag_str, post)
         projected = existing + active_minutes
-        capacity = int(post_capaciteiten.get(post, DEFAULT_CAPACITEIT_MINUTEN) or DEFAULT_CAPACITEIT_MINUTEN)
-        over_capacity_minutes += max(0, projected - capacity)
-        projected_ratio_points += int((projected / max(capacity, 1)) * 100)
+        capacity = int(
+            post_capaciteiten.get(post, DEFAULT_CAPACITEIT_MINUTEN)
+            or DEFAULT_CAPACITEIT_MINUTEN
+        )
 
-    standard_post_bonus = 0
-    if package_post:
-        standard_post_bonus = sum(0 if package_post == t["standaard_post"] else 1 for t in package["tasks"])
+        ratio = projected / max(capacity, 1)
+        over_minutes = max(0, projected - capacity)
+
+        # Extra spreidingsdruk:
+        # als een post al richting vol gaat, moet dat zwaarder wegen
+        # dan alleen de actuele pakketbelasting.
+        if ratio >= 0.8:
+            high_load_penalty += int(ratio * 2000)
+
+        if ratio >= 1.0:
+            overload_penalty += 20000
+
+        over_capacity_minutes += over_minutes
+        projected_ratio_points += int(ratio * 100)
+
+        # Menselijke plannerlogica:
+        # 0-70%  = prima
+        # 70-80% = licht vol
+        # 80-90% = liever spreiden
+        # 90-100% = zwaar
+        # >100% = alleen als er geen goed alternatief is
+        if ratio > 1:
+            overload_penalty += 10000 + over_minutes * 25 + int((ratio - 1) * 5000)
+        elif ratio >= 0.9:
+            high_load_penalty += 3000 + int((ratio - 0.9) * 3000)
+        elif ratio >= 0.8:
+            high_load_penalty += 1200 + int((ratio - 0.8) * 2000)
+        elif ratio >= 0.7:
+            high_load_penalty += 300 + int((ratio - 0.7) * 1000)
+
+        projected_load_debug[post] = {
+            "existing": existing,
+            "package_active": active_minutes,
+            "projected": projected,
+            "capacity": capacity,
+            "ratio": round(ratio, 2),
+            "over": over_minutes,
+        }
 
     score = (
         fixed_violation_count,
         offset_violation_count,
-        over_capacity_minutes,
-        fragmentation_count,
+
+        # Capaciteit moet vroeger winnen dan pakket-/postvoorkeur.
+        overload_penalty,
+        high_load_penalty,
         projected_ratio_points,
+        over_capacity_minutes,
+
+        # Daarna pas pakketcohesie en praktische volgorde.
+        fragmentation_count,
         wait_minutes,
         preference_distance,
-        standard_post_bonus,
+        non_preferred_post_count,
+
         offset,
         package_post,
     )
 
     debug = (
-        f"{werkdag_str}/{package_post}: score={score}, active_by_post={active_by_post}, "
-        f"overcap={over_capacity_minutes}, fragments={fragmentation_count}, "
-        f"offset_violations={offset_violation_count}, pref_distance={preference_distance}"
+        f"{werkdag_str}/{package_post}: score={score}, "
+        f"loads={projected_load_debug}, "
+        f"overcap={over_capacity_minutes}, "
+        f"high_load_penalty={high_load_penalty}, "
+        f"fragments={fragmentation_count}, "
+        f"offset_violations={offset_violation_count}, "
+        f"pref_distance={preference_distance}, "
+        f"non_preferred_posts={non_preferred_post_count}"
     )
+
     return score, debug
 
 
@@ -1963,6 +2059,15 @@ def build_planning_df(
                 task_row["Pakket code"] = package["package_code"]
                 task_row["Pakket volgorde"] = index
                 task_row["Pakket status"] = package_status
+
+                if str(row_get(h, "code", "") or "").startswith("GG14"):
+                    task_row["Planner reden"] = (
+                        f"{task_row['Planner reden']} | "
+                        f"DEBUG code={row_get(h, 'code')} "
+                        f"pakket={package['package_code']} "
+                        f"volgorde={index} "
+                        f"parsed={parse_task_sequence_code(row_get(h, 'code'))}"
+                    )
 
                 planning_rows.append(task_row)
 
