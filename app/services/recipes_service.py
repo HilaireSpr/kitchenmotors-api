@@ -97,6 +97,8 @@ def get_recipe_detail(conn, recept_code: str) -> dict | None:
             sort_order,
             post,
             toestel,
+            post_policy,
+            alternatieve_posten,
             passieve_tijd,
             is_vaste_taak,
             heeft_vast_startuur,
@@ -166,6 +168,8 @@ def get_recipe_detail(conn, recept_code: str) -> dict | None:
                 "volgorde_handeling": row["sort_order"],
                 "post": row["post"],
                 "toestel": row["toestel"],
+                "post_policy": row["post_policy"] or "flexible",
+                "alternatieve_posten": row["alternatieve_posten"] or "",
                 "dag_offset": dag_offset,
                 "dag_offset_min": dag_offset_min,
                 "dag_offset_max": dag_offset_max,
@@ -240,7 +244,7 @@ def create_handeling(
     code: str,
     naam: str,
     post=None,
-    toestel=None,
+    toestel=None,    
     dag_offset=0,
     dag_offset_min=0,
     dag_offset_max=0,
@@ -251,6 +255,8 @@ def create_handeling(
     planning_type=None,
     actief_vanaf=None,
     actief_tot=None,
+    post_policy="flexible",
+    alternatieve_posten=None,
 ):
     recipe = conn.execute(
         """
@@ -282,6 +288,8 @@ def create_handeling(
             sort_order,
             post,
             toestel,
+            post_policy,
+            alternatieve_posten,
             dag_offset,
             min_offset_dagen,
             max_offset_dagen,
@@ -293,7 +301,7 @@ def create_handeling(
             actief_vanaf,
             actief_tot
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             recept_id,
@@ -302,6 +310,8 @@ def create_handeling(
             next_sort_order,
             _normalize_optional_text(post),
             _normalize_optional_text(toestel),
+            _normalize_optional_text(post_policy) or "flexible",
+            _normalize_optional_text(alternatieve_posten),
             _to_int(dag_offset, 0),
             _to_int(dag_offset_min, 0),
             _to_int(dag_offset_max, 0),
@@ -401,6 +411,8 @@ def update_handeling(
     planning_type=None,
     actief_vanaf=None,
     actief_tot=None,
+    post_policy="flexible",
+    alternatieve_posten=None,
 ) -> dict | None:
     existing = conn.execute(
         """
@@ -417,6 +429,8 @@ def update_handeling(
 
     normalized_post = _normalize_optional_text(post)
     normalized_toestel = _normalize_optional_text(toestel)
+    normalized_post_policy = _normalize_optional_text(post_policy) or "flexible"
+    normalized_alternatieve_posten = _normalize_optional_text(alternatieve_posten)
     normalized_planning_type = _normalize_planning_type(planning_type)
 
     normalized_actief_vanaf = (
@@ -447,6 +461,8 @@ def update_handeling(
             naam = ?,
             post = ?,
             toestel = ?,
+            post_policy = ?,
+            alternatieve_posten = ?,
             dag_offset = ?,
             min_offset_dagen = ?,
             max_offset_dagen = ?,
@@ -463,6 +479,8 @@ def update_handeling(
             naam.strip(),
             normalized_post,
             normalized_toestel,
+            normalized_post_policy,
+            normalized_alternatieve_posten,
             dag_offset_value,
             dag_offset_min_value,
             dag_offset_max_value,
@@ -490,6 +508,8 @@ def update_handeling(
             sort_order,
             post,
             toestel,
+            post_policy,
+            alternatieve_posten,
             passieve_tijd,
             is_vaste_taak,
             heeft_vast_startuur,
@@ -515,6 +535,8 @@ def update_handeling(
         "volgorde_handeling": updated["sort_order"],
         "post": updated["post"],
         "toestel": updated["toestel"],
+        "post_policy": updated["post_policy"] or "flexible",
+        "alternatieve_posten": updated["alternatieve_posten"] or "",
         "dag_offset": dag_offset_value,
         "dag_offset_min": dag_offset_min_value,
         "dag_offset_max": dag_offset_max_value,

@@ -86,7 +86,15 @@ def parse_task_sequence_code(value: str | None) -> tuple[str, int] | None:
     if not value:
         return None
 
-    match = TASK_SEQUENCE_RE.match(str(value).strip())
+    task_code = str(value).strip()
+    parts = task_code.split("_")
+
+    # PAZO_1_SA = stap 1 van groep PAZO_1_SA
+    if len(parts) == 3:
+        return task_code, 1
+
+    # PAZO_1_SA_2 = stap 2 van groep PAZO_1_SA
+    match = TASK_SEQUENCE_RE.match(task_code)
     if not match:
         return None
 
@@ -170,6 +178,17 @@ def get_toestellen(conn) -> list[str]:
 
     return [str(r["naam"]).strip() for r in rows if str(r["naam"]).strip()]
 
+def get_posten(conn) -> list[str]:
+    rows = conn.execute(
+        """
+        SELECT naam
+        FROM posten
+        WHERE COALESCE(actief, 1) = 1
+        ORDER BY naam
+        """
+    ).fetchall()
+
+    return [str(r["naam"]).strip() for r in rows if str(r["naam"]).strip()]
 
 # =========================================================
 # LEGACY MENU GENERATIE (oude flow, behouden voor compatibiliteit)
@@ -1073,44 +1092,32 @@ def get_task_group_key(task_code: str | None) -> str | None:
     if not task_code:
         return None
 
+    task_code = str(task_code).strip()
     parts = task_code.split("_")
 
-    if len(parts) < 4:
+    # Voor codes zoals PAZO_1_SA
+    # Dit is al een groepscode zonder volgnummer.
+    if len(parts) == 3:
+        return task_code
+
+    # Voor codes zoals PAZO_1_SA_2
+    # Laatste deel is volgnummer, dus groep is PAZO_1_SA.
+    if len(parts) >= 4 and parts[-1].isdigit():
+        return "_".join(parts[:-1])
+
+    return None
+
+def get_task_group_day_key(
+    task_code: str | None,
+    min_offset: int,
+    max_offset: int,
+):
+    group_key = get_task_group_key(task_code)
+
+    if not group_key:
         return None
-
-    return "_".join(parts[:-1])
-
-def get_task_group_day_key(task_code: str | None, min_offset: int, max_offset: int):
-    if not task_code:
-        return None
-
-    parts = task_code.split("_")
-
-    if len(parts) < 4:
-        return None
-
-    group_key = "_".join(parts[:-1])
 
     return f"{group_key}|{min_offset}|{max_offset}"
-
-
-def _get_candidate_posts(preferred_post: str, all_posts: list[str]) -> list[str]:
-    preferred_post = (preferred_post or GEEN_POST).strip() or GEEN_POST
-    real_posts = [p for p in all_posts if p and p != GEEN_POST]
-
-    if not real_posts:
-        return [preferred_post]
-
-    candidates: list[str] = []
-
-    if preferred_post in real_posts:
-        candidates.append(preferred_post)
-
-    for post in real_posts:
-        if post not in candidates:
-            candidates.append(post)
-
-    return candidates
 
 
 def _choose_best_post_and_offset_day(
@@ -1200,6 +1207,535 @@ def _choose_best_post_and_offset_day(
 
     return beste_post, beste_dag, beste_dag.isoformat(), decision_debug
 
+def _normalize_post_policy(value) -> str:
+    normalized = str(value or "").strip().lower()
+
+    if normalized in {"fixed", "flexible"}:
+        return normalized
+
+    return "flexible"
+
+
+def _parse_alternatieve_posten(value) -> list[str]:
+    if not value:
+        return []
+
+    return [
+        part.strip()
+        for part in str(value).replace(";", ",").split(",")
+        if part.strip()
+    ]
+
+
+def _get_candidate_posts(
+    standaard_post: str,
+    post_policy: str,
+    alternatieve_posten: str | None,
+    alle_posten: list[str],
+) -> list[str]:
+    standaard_post = (standaard_post or GEEN_POST).strip() or GEEN_POST
+    post_policy = _normalize_post_policy(post_policy)
+
+    if post_policy == "fixed":
+        return [standaard_post]
+
+    alternatieven = _parse_alternatieve_posten(alternatieve_posten)
+
+    if alternatieven:
+        result = [standaard_post] + alternatieven
+    else:
+        result = alle_posten[:]
+
+    cleaned = []
+    seen = set()
+
+    for post in result:
+        post = str(post or "").strip()
+        if not post or post == GEEN_POST:
+            continue
+
+        if post not in seen:
+            cleaned.append(post)
+            seen.add(post)
+
+    return cleaned or [standaard_post]
+
+
+def _choose_best_post_for_day(
+    planning_rows: list[dict],
+    post_states: dict,
+    werkdag: date,
+    werkdag_str: str,
+    kandidaat_posten: list[str],
+    voorkeur_post: str,
+    starturen_map: dict,
+    actieve_tijd: int,
+    passieve_tijd: int,
+):
+    beste_post = kandidaat_posten[0]
+    beste_score = None
+    debug_rows = []
+
+    totale_duur = int(actieve_tijd or 0) + int(passieve_tijd or 0)
+
+    for post in kandidaat_posten:
+        post_load = _calculate_day_post_load(planning_rows, werkdag_str, post)
+        starttijd = _get_post_starttijd(starturen_map, werkdag_str, post)
+        post_state = _get_post_state(post_states, werkdag, werkdag_str, post, starttijd)
+
+        wacht_minuten = max(
+            0,
+            int(
+                (
+                    post_state["post_available_at"]
+                    - datetime.combine(werkdag, starttijd)
+                ).total_seconds()
+                // 60
+            ),
+        )
+
+        projected_load = post_load + totale_duur
+        voorkeur_penalty = 0 if post == voorkeur_post else 45
+
+        score_tuple = (
+            projected_load,
+            wacht_minuten,
+            voorkeur_penalty,
+            post,
+        )
+
+        debug_rows.append(
+            f"{post}: projected_load={projected_load}m, wait={wacht_minuten}m, preference_penalty={voorkeur_penalty}, score={score_tuple}"
+        )
+
+        if beste_score is None or score_tuple < beste_score:
+            beste_score = score_tuple
+            beste_post = post
+
+    return beste_post, " || ".join(debug_rows)
+
+
+PLANNING_COLUMNS = [
+    "Planning ID",
+    "Recept ID",
+    "Handeling ID",
+    "Onderdeel",
+    "Cyclus",
+    "Serveerdag",
+    "Recept",
+    "Prognose aantal",
+    "Menu-groep",
+    "Periode naam",
+    "Taak",
+    "Post",
+    "Toestel",
+    "Werkdag",
+    "Werkdag_iso",
+    "Startuur post",
+    "Start",
+    "Einde",
+    "Actieve tijd",
+    "Passieve tijd",
+    "Totale duur",
+    "Stappen",
+    "Voorkeur offset",
+    "Min offset",
+    "Max offset",
+    "Gekozen offset",
+    "Planner score",
+    "Planner reden",
+    "Planner kandidaatdagen",
+    "Locked",
+    "Is vaste taak",
+    "Planning type",
+    "Actief vanaf",
+    "Actief tot",
+    "Conflict",
+    "Conflict reden",
+    "Pakket ID",
+    "Pakket code",
+    "Pakket volgorde",
+    "Pakket status",
+]
+
+
+def _planning_id_for(menu_item, handeling) -> str:
+    return (
+        f"{menu_item['id']}|{menu_item['serveerdag']}|{menu_item['recept_id']}|{handeling['id']}|"
+        f"{menu_item['cyclus_week']}|{menu_item['cyclus_dag']}"
+    )
+
+
+def _get_offset_window(handeling) -> tuple[int, int, int]:
+    preferred_offset = int(row_get(handeling, "dag_offset", 0) or 0)
+    min_offset = int(
+        row_get(handeling, "min_offset_dagen")
+        if row_get(handeling, "min_offset_dagen") is not None
+        else preferred_offset
+    )
+    max_offset = int(
+        row_get(handeling, "max_offset_dagen")
+        if row_get(handeling, "max_offset_dagen") is not None
+        else preferred_offset
+    )
+    if min_offset > max_offset:
+        min_offset, max_offset = max_offset, min_offset
+    return preferred_offset, min_offset, max_offset
+
+
+def _calculate_active_day_post_load(planning_rows: list[dict], werkdag_str: str, post: str) -> int:
+    total = 0
+    for row in planning_rows:
+        if row.get("Werkdag_iso") == werkdag_str and row.get("Post") == post:
+            total += int(row.get("Actieve tijd", 0) or 0)
+    return total
+
+
+def _build_package_id(menu_item, package_code: str) -> str:
+    return (
+        f"{menu_item['id']}|{menu_item['serveerdag']}|{menu_item['recept_id']}|"
+        f"{menu_item['cyclus_week']}|{menu_item['cyclus_dag']}|{package_code}"
+    )
+
+
+def _get_task_package_code(handeling) -> str:
+    task_code = get_handeling_task_code(handeling)
+    group_key = get_task_group_key(task_code)
+    if group_key:
+        return group_key
+    if task_code:
+        return task_code
+    return f"handeling_{handeling['id']}"
+
+
+def _prepare_handeling_runtime(conn, menu_item, handeling, override_map: dict) -> dict:
+    preferred_offset, min_offset, max_offset = _get_offset_window(handeling)
+    standaard_post = (row_get(handeling, "post", GEEN_POST) or GEEN_POST).strip() or GEEN_POST
+    post_policy = _normalize_post_policy(row_get(handeling, "post_policy", "flexible"))
+    planning_id = _planning_id_for(menu_item, handeling)
+
+    return {
+        "handeling": handeling,
+        "planning_id": planning_id,
+        "override": override_map.get(planning_id),
+        "planning_type": _get_planning_type(handeling),
+        "task_code": get_handeling_task_code(handeling),
+        "parsed_task_code": parse_task_sequence_code(get_handeling_task_code(handeling)),
+        "preferred_offset": preferred_offset,
+        "min_offset": min_offset,
+        "max_offset": max_offset,
+        "standaard_post": standaard_post,
+        "post_policy": post_policy,
+        "alternatieve_posten": row_get(handeling, "alternatieve_posten"),
+        "gevraagd_toestel": normalize_toestel(row_get(handeling, "toestel")),
+        "actieve_tijd": get_actieve_tijd(conn, handeling["id"]),
+        "passieve_tijd": int(row_get(handeling, "passieve_tijd", 0) or 0),
+        "stappen_text": get_stappen_text(conn, handeling["id"]),
+    }
+
+
+def _task_candidate_posts(task: dict, alle_posten: list[str]) -> list[str]:
+    override = task.get("override")
+    if override and override.get("post_override"):
+        return [str(override["post_override"]).strip()]
+
+    return _get_candidate_posts(
+        standaard_post=task["standaard_post"],
+        post_policy=task["post_policy"],
+        alternatieve_posten=task["alternatieve_posten"],
+        alle_posten=alle_posten,
+    )
+
+
+def _post_allowed_for_task(task: dict, post: str, alle_posten: list[str]) -> bool:
+    return post in _task_candidate_posts(task, alle_posten)
+
+
+def _choose_task_post_from_package(task: dict, package_post: str, alle_posten: list[str]) -> tuple[str, bool]:
+    candidates = _task_candidate_posts(task, alle_posten)
+    if package_post in candidates:
+        return package_post, False
+    if candidates:
+        return candidates[0], True
+    return task["standaard_post"], True
+
+
+def _build_packages_for_menu_item(conn, menu_item, handelingen, override_map: dict, alle_posten: list[str]) -> list[dict]:
+    packages_by_code: dict[str, dict] = {}
+
+    for h in handelingen:
+        package_code = _get_task_package_code(h)
+        if package_code not in packages_by_code:
+            packages_by_code[package_code] = {
+                "package_code": package_code,
+                "package_id": _build_package_id(menu_item, package_code),
+                "menu_item": menu_item,
+                "tasks": [],
+            }
+
+        task = _prepare_handeling_runtime(conn, menu_item, h, override_map)
+        task["candidate_posts"] = _task_candidate_posts(task, alle_posten)
+        packages_by_code[package_code]["tasks"].append(task)
+
+    packages = list(packages_by_code.values())
+
+    for package in packages:
+        package["tasks"] = sorted(
+            package["tasks"],
+            key=lambda t: (
+                get_dependency_step_sort_key(t["handeling"]),
+                int(row_get(t["handeling"], "sort_order", 0) or 0),
+                str(t.get("task_code") or ""),
+                int(t["handeling"]["id"]),
+            ),
+        )
+
+    packages.sort(
+        key=lambda p: (
+            min(t["preferred_offset"] for t in p["tasks"]),
+            p["package_code"],
+        )
+    )
+
+    return packages
+
+
+def _candidate_package_offsets(tasks: list[dict]) -> list[int]:
+    automatic_tasks = [
+        t for t in tasks
+        if not (t.get("override") and t["override"].get("werkdag_override"))
+    ]
+
+    if not automatic_tasks:
+        return [0]
+
+    min_common = max(t["min_offset"] for t in automatic_tasks)
+    max_common = min(t["max_offset"] for t in automatic_tasks)
+
+    hard_offsets = {
+        t["preferred_offset"]
+        for t in automatic_tasks
+        if t["planning_type"] == "hard"
+    }
+
+    if hard_offsets:
+        candidates = sorted(hard_offsets)
+        return candidates
+
+    if min_common <= max_common:
+        return list(range(min_common, max_common + 1))
+
+    # Fallback: er is geen echte intersectie. We houden het pakket toch samen
+    # en markeren later welke taken buiten hun individuele venster vallen.
+    low = min(t["min_offset"] for t in automatic_tasks)
+    high = max(t["max_offset"] for t in automatic_tasks)
+    preferred_values = sorted({t["preferred_offset"] for t in automatic_tasks})
+    range_values = list(range(low, high + 1))
+    return sorted(set(preferred_values + range_values))
+
+
+def _candidate_package_posts(tasks: list[dict], alle_posten: list[str]) -> list[str]:
+    automatic_tasks = [
+        t for t in tasks
+        if not (t.get("override") and t["override"].get("post_override"))
+    ]
+
+    if not automatic_tasks:
+        return [tasks[0]["candidate_posts"][0] if tasks[0]["candidate_posts"] else tasks[0]["standaard_post"]]
+
+    post_sets = [set(t["candidate_posts"]) for t in automatic_tasks if t["candidate_posts"]]
+    if post_sets:
+        common = set.intersection(*post_sets)
+        if common:
+            preferred_order = []
+            for t in automatic_tasks:
+                if t["standaard_post"] in common and t["standaard_post"] not in preferred_order:
+                    preferred_order.append(t["standaard_post"])
+            return preferred_order + sorted(common - set(preferred_order))
+
+    # Geen gemeenschappelijke post. Geef de scorer de standaardposten als kandidaten;
+    # individuele taken die daar niet mogen staan, wijken gecontroleerd uit.
+    result = []
+    for t in automatic_tasks:
+        for post in [t["standaard_post"]] + t["candidate_posts"]:
+            if post and post != GEEN_POST and post not in result:
+                result.append(post)
+    return result or alle_posten[:1] or [GEEN_POST]
+
+
+def _score_package_candidate(
+    package: dict,
+    offset: int,
+    package_post: str,
+    planning_rows: list[dict],
+    post_states: dict,
+    starturen_map: dict,
+    post_capaciteiten: dict[str, int],
+    alle_posten: list[str],
+    serveerdatum: date,
+) -> tuple[tuple, str]:
+    werkdag = serveerdatum + timedelta(days=offset)
+    werkdag_str = werkdag.isoformat()
+
+    active_by_post: dict[str, int] = {}
+    fragmentation_count = 0
+    offset_violation_count = 0
+    fixed_violation_count = 0
+    preference_distance = 0
+    wait_minutes = 0
+
+    for task in package["tasks"]:
+        override = task.get("override")
+        if override and override.get("werkdag_override"):
+            continue
+
+        task_post, fragmented = _choose_task_post_from_package(task, package_post, alle_posten)
+        if fragmented:
+            fragmentation_count += 1
+
+        active_by_post[task_post] = active_by_post.get(task_post, 0) + int(task["actieve_tijd"] or 0)
+
+        if offset < task["min_offset"] or offset > task["max_offset"]:
+            offset_violation_count += 1
+
+        if task["planning_type"] == "hard" and offset != task["preferred_offset"]:
+            fixed_violation_count += 1
+
+        preference_distance += abs(offset - task["preferred_offset"])
+
+        starttijd = _get_post_starttijd(starturen_map, werkdag_str, task_post)
+        default_start = datetime.combine(werkdag, starttijd)
+        state = post_states.get((werkdag_str, task_post))
+        if state:
+            wait_minutes += max(0, int((state["post_available_at"] - default_start).total_seconds() // 60))
+
+    over_capacity_minutes = 0
+    projected_ratio_points = 0
+
+    for post, active_minutes in active_by_post.items():
+        existing = _calculate_active_day_post_load(planning_rows, werkdag_str, post)
+        projected = existing + active_minutes
+        capacity = int(post_capaciteiten.get(post, DEFAULT_CAPACITEIT_MINUTEN) or DEFAULT_CAPACITEIT_MINUTEN)
+        over_capacity_minutes += max(0, projected - capacity)
+        projected_ratio_points += int((projected / max(capacity, 1)) * 100)
+
+    standard_post_bonus = 0
+    if package_post:
+        standard_post_bonus = sum(0 if package_post == t["standaard_post"] else 1 for t in package["tasks"])
+
+    score = (
+        fixed_violation_count,
+        offset_violation_count,
+        over_capacity_minutes,
+        fragmentation_count,
+        projected_ratio_points,
+        wait_minutes,
+        preference_distance,
+        standard_post_bonus,
+        offset,
+        package_post,
+    )
+
+    debug = (
+        f"{werkdag_str}/{package_post}: score={score}, active_by_post={active_by_post}, "
+        f"overcap={over_capacity_minutes}, fragments={fragmentation_count}, "
+        f"offset_violations={offset_violation_count}, pref_distance={preference_distance}"
+    )
+    return score, debug
+
+
+def _choose_package_placement(
+    package: dict,
+    planning_rows: list[dict],
+    post_states: dict,
+    starturen_map: dict,
+    post_capaciteiten: dict[str, int],
+    alle_posten: list[str],
+    serveerdatum: date,
+) -> dict:
+    offsets = _candidate_package_offsets(package["tasks"])
+    posts = _candidate_package_posts(package["tasks"], alle_posten)
+
+    candidates = []
+    for offset in offsets:
+        for post in posts:
+            score, debug = _score_package_candidate(
+                package=package,
+                offset=offset,
+                package_post=post,
+                planning_rows=planning_rows,
+                post_states=post_states,
+                starturen_map=starturen_map,
+                post_capaciteiten=post_capaciteiten,
+                alle_posten=alle_posten,
+                serveerdatum=serveerdatum,
+            )
+            candidates.append({"offset": offset, "post": post, "score": score, "debug": debug})
+
+    best = min(candidates, key=lambda c: c["score"])
+    werkdag = serveerdatum + timedelta(days=best["offset"])
+
+    reason_parts = ["Pakketplanning"]
+    if best["score"][2] > 0:
+        reason_parts.append(f"overcapaciteit {best['score'][2]} min")
+    if best["score"][3] > 0:
+        reason_parts.append(f"{best['score'][3]} taak/taken buiten pakketpost")
+    if best["score"][6] > 0:
+        reason_parts.append("offset afgewogen")
+    if len(reason_parts) == 1:
+        reason_parts.append("zelfde dag/post zonder zware conflicten")
+
+    return {
+        "offset": best["offset"],
+        "werkdag": werkdag,
+        "werkdag_str": werkdag.isoformat(),
+        "post": best["post"],
+        "score": best["score"],
+        "reason": " | ".join(reason_parts),
+        "candidate_debug_text": " || ".join(c["debug"] for c in candidates),
+    }
+
+
+def _apply_start_override_if_any(start_dt: datetime, starttijd: time, werkdag: date, override) -> datetime:
+    if not override:
+        return start_dt
+
+    if override.get("start_offset_minutes") is None:
+        return start_dt
+
+    try:
+        offset_minutes = int(override["start_offset_minutes"] or 0)
+    except Exception:
+        return start_dt
+
+    return datetime.combine(werkdag, starttijd) + timedelta(minutes=offset_minutes)
+
+
+def _append_conflict(existing: str, extra: str) -> str:
+    if not extra:
+        return existing or ""
+    if existing:
+        return f"{existing} | {extra}"
+    return extra
+
+
+def _planner_debug_for_task(task: dict, placement: dict, conflict_notes: list[str]) -> dict:
+    chosen_offset = placement.get("offset")
+    reason = placement.get("reason", "Pakketplanning")
+    if conflict_notes:
+        reason = f"{reason} | {' | '.join(conflict_notes)}"
+
+    return {
+        "preferred_offset": task["preferred_offset"],
+        "min_offset": task["min_offset"],
+        "max_offset": task["max_offset"],
+        "chosen_offset": chosen_offset,
+        "chosen_score": str(placement.get("score", "0")),
+        "reason_summary": reason,
+        "candidate_debug_text": placement.get("candidate_debug_text", ""),
+    }
+
+
 def build_planning_df(
     conn,
     start_monday: str,
@@ -1207,10 +1743,23 @@ def build_planning_df(
     cycles: int,
     menu_groep: str | None = None,
 ):
+    """
+    Bouwt een planning op met productiepakketten als primaire planningseenheid.
+
+    Kernregels:
+    - taken met dezelfde pakketcode worden samen geëvalueerd;
+    - het pakket krijgt eerst één voorkeursdag en één voorkeurspost;
+    - taken binnen het pakket worden daarna sequentieel ingepland;
+    - actieve tijd belast capaciteit;
+    - passieve tijd bepaalt wel de taak-eindtijd en toestelbezetting, maar niet de postcapaciteit;
+    - bestaande overrides blijven taakniveau-ingrepen van de menselijke planner.
+    """
     starturen_map = get_planning_starturen(conn)
     alle_toestellen = get_toestellen(conn)
     post_capaciteiten = get_post_capaciteiten(conn)
     alle_posten = sorted([post for post in post_capaciteiten.keys() if post and post != GEEN_POST])
+    if not alle_posten:
+        alle_posten = get_posten(conn)
 
     raw_menu_items = _get_menu_items(conn, menu_groep=menu_groep)
     menu_items = expand_menu_items(
@@ -1233,201 +1782,136 @@ def build_planning_df(
         """
     ).fetchall()
 
-    planning_override_map = {
-        row["planning_id"]: dict(row) for row in override_rows
-    }
+    planning_override_map = {row["planning_id"]: dict(row) for row in override_rows}
 
     planning_rows: list[dict] = []
     post_states: dict[tuple[str, str], dict] = {}
     toestel_cursors: dict[tuple[str, str], datetime] = {}
-    dependency_end_by_group_step: dict[tuple[str, int], datetime] = {}
-    task_group_workdays: dict[str, tuple[date, str]] = {}
 
     for menu_item in menu_items:
         serveerdatum = parse_iso_date(menu_item["serveerdag"])
         handelingen = _get_handelingen_for_recept(conn, menu_item["recept_id"])
-
-        handelingen = [
-            h for h in handelingen
-            if _is_handeling_active_for_serveerdatum(h, serveerdatum)
-        ]
+        handelingen = [h for h in handelingen if _is_handeling_active_for_serveerdatum(h, serveerdatum)]
 
         handelingen = sorted(
             handelingen,
             key=lambda h: (
-                int(row_get(h, "dag_offset", 0) or 0),
+                get_task_group_key(get_handeling_task_code(h)) or get_handeling_task_code(h) or "",
                 get_dependency_step_sort_key(h),
-                row_get(h, "sort_order", 0),
+                int(row_get(h, "dag_offset", 0) or 0),
+                int(row_get(h, "sort_order", 0) or 0),
+                str(row_get(h, "code", "") or ""),
             ),
         )
 
-        for h in handelingen:
-            planning_type = _get_planning_type(h)
-            preferred_offset = int(h["dag_offset"] or 0)
-            min_offset = int(h["min_offset_dagen"] if h["min_offset_dagen"] is not None else preferred_offset)
-            max_offset = int(h["max_offset_dagen"] if h["max_offset_dagen"] is not None else preferred_offset)
+        packages = _build_packages_for_menu_item(
+            conn=conn,
+            menu_item=menu_item,
+            handelingen=handelingen,
+            override_map=planning_override_map,
+            alle_posten=alle_posten,
+        )
 
-            standaard_post = (h["post"] or GEEN_POST).strip() or GEEN_POST
-            gevraagd_toestel = normalize_toestel(h["toestel"])
-            task_code = get_handeling_task_code(h)
-            parsed_task_code = parse_task_sequence_code(task_code)
-            task_group_key = get_task_group_key(task_code)
-            task_group_day_key = get_task_group_day_key(
-                task_code=task_code,
-                min_offset=min_offset,
-                max_offset=max_offset,
+        for package in packages:
+            placement = _choose_package_placement(
+                package=package,
+                planning_rows=planning_rows,
+                post_states=post_states,
+                starturen_map=starturen_map,
+                post_capaciteiten=post_capaciteiten,
+                alle_posten=alle_posten,
+                serveerdatum=serveerdatum,
             )
 
-            dependency_ready_at = None
-            dependency_conflict_reason = ""
+            previous_task_end: datetime | None = None
+            package_status = "OK"
 
-            if parsed_task_code:
-                dependency_group, dependency_step = parsed_task_code
+            for index, task in enumerate(package["tasks"], start=1):
+                h = task["handeling"]
+                override = task.get("override")
+                planning_type = task["planning_type"]
 
-                if dependency_step > 1:
-                    previous_key = (dependency_group, dependency_step - 1)
-                    dependency_ready_at = dependency_end_by_group_step.get(previous_key)
+                conflict = False
+                conflict_reason = ""
+                conflict_notes: list[str] = []
 
-                    if dependency_ready_at is None:
-                        dependency_conflict_reason = (
-                            f"Vorige taak {dependency_group}_{dependency_step - 1} nog niet ingepland"
-                        )
+                if override and override.get("werkdag_override"):
+                    werkdag_str = override["werkdag_override"]
+                    werkdag = parse_iso_date(werkdag_str)
+                    chosen_offset = int((werkdag - serveerdatum).days)
+                    task_placement = {
+                        **placement,
+                        "offset": chosen_offset,
+                        "werkdag": werkdag,
+                        "werkdag_str": werkdag_str,
+                        "reason": "Menselijke override op taakniveau",
+                        "score": "override",
+                        "candidate_debug_text": "Override toegepast; pakket kan hierdoor bewust gesplitst zijn.",
+                    }
+                    if werkdag_str != placement["werkdag_str"]:
+                        package_status = "Door override gesplitst"
+                        conflict_notes.append("pakketdag door override doorbroken")
+                else:
+                    werkdag = placement["werkdag"]
+                    werkdag_str = placement["werkdag_str"]
+                    chosen_offset = placement["offset"]
+                    task_placement = placement
 
-            planning_id_preview = (
-                f"{menu_item['id']}|{menu_item['serveerdag']}|{menu_item['recept_id']}|{h['id']}|"
-                f"{menu_item['cyclus_week']}|{menu_item['cyclus_dag']}"
-            )
-            override = planning_override_map.get(planning_id_preview)
-
-            post = override["post_override"] if override and override.get("post_override") else standaard_post
-
-            if (
-                task_group_day_key
-                and task_group_day_key in task_group_workdays
-                and not (override and override.get("werkdag_override"))
-            ):
-                werkdag, werkdag_str = task_group_workdays[task_group_day_key]
-
-                planner_debug = {
-                    "preferred_offset": preferred_offset,
-                    "min_offset": min_offset,
-                    "max_offset": max_offset,
-                    "chosen_offset": None,
-                    "chosen_score": "0",
-                    "reason_summary": f"Zelfde productiegroep: dag geërfd van {task_group_day_key}",
-                    "candidate_debug_text": "Dag gekozen op groepsniveau. Deze taak volgt dezelfde groep.",
-                }
-
-            elif override and override.get("werkdag_override"):
-                werkdag_str = override["werkdag_override"]
-                werkdag = parse_iso_date(werkdag_str)
-
-                planner_debug = {
-                    "preferred_offset": preferred_offset,
-                    "min_offset": min_offset,
-                    "max_offset": max_offset,
-                    "chosen_offset": None,
-                    "chosen_score": "0",
-                    "reason_summary": (
-                        "Locked by override"
-                        if int(override.get("locked") or 0) == 1
-                        else "Forced by override"
-                    ),
-                    "candidate_debug_text": "Override applied",
-                }
-
-            elif planning_type == "hard":
-                vaste_offset = preferred_offset
-                werkdag = serveerdatum + timedelta(days=vaste_offset)
-                werkdag_str = werkdag.isoformat()
-
-                planner_debug = {
-                    "preferred_offset": preferred_offset,
-                    "min_offset": min_offset,
-                    "max_offset": max_offset,
-                    "chosen_offset": vaste_offset,
-                    "chosen_score": "0",
-                    "reason_summary": "Hard fixed taak: verplichte dag",
-                    "candidate_debug_text": f"Hard fixed op offset {vaste_offset} ({werkdag_str})",
-                }
-
-            elif planning_type == "soft":
-                kandidaat_posten = _get_candidate_posts(post, alle_posten)
-                post, werkdag, werkdag_str, planner_debug = _choose_best_post_and_offset_day(
-                    planning_rows=planning_rows,
-                    post_states=post_states,
-                    toestel_cursors=toestel_cursors,
-                    starturen_map=starturen_map,
-                    alle_toestellen=alle_toestellen,
-                    kandidaat_posten=kandidaat_posten,
-                    gevraagd_toestel=gevraagd_toestel,
-                    serveerdatum=serveerdatum,
-                    preferred_post=post,
-                    preferred_offset=preferred_offset,
-                    min_offset=min_offset,
-                    max_offset=max_offset,
-                    heeft_vast_startuur=h["heeft_vast_startuur"],
-                    vast_startuur=h["vast_startuur"],
-                    dependency_ready_at=dependency_ready_at,
-                )
-                planner_debug["reason_summary"] = f"Soft fixed: {planner_debug['reason_summary']}"
-
-            else:
-                kandidaat_posten = _get_candidate_posts(post, alle_posten)
-                post, werkdag, werkdag_str, planner_debug = _choose_best_post_and_offset_day(
-                    planning_rows=planning_rows,
-                    post_states=post_states,
-                    toestel_cursors=toestel_cursors,
-                    starturen_map=starturen_map,
-                    alle_toestellen=alle_toestellen,
-                    kandidaat_posten=kandidaat_posten,
-                    gevraagd_toestel=gevraagd_toestel,
-                    serveerdatum=serveerdatum,
-                    preferred_post=post,
-                    preferred_offset=preferred_offset,
-                    min_offset=min_offset,
-                    max_offset=max_offset,
-                    heeft_vast_startuur=0,
-                    vast_startuur="",
-                    dependency_ready_at=dependency_ready_at,
-                )
-                planner_debug["reason_summary"] = f"Floating: {planner_debug['reason_summary']}"
-
-            if task_group_day_key and task_group_day_key not in task_group_workdays:
-                task_group_workdays[task_group_day_key] = (werkdag, werkdag_str)
-
-            starttijd = _get_post_starttijd(starturen_map, werkdag_str, post)
-            post_state = _get_post_state(post_states, werkdag, werkdag_str, post, starttijd)
-
-            actieve_tijd = get_actieve_tijd(conn, h["id"])
-            passieve_tijd = int(h["passieve_tijd"] or 0)
-            totale_duur = actieve_tijd + passieve_tijd
-
-            fixed_start_dt = _get_fixed_start_dt(werkdag, h["heeft_vast_startuur"], h["vast_startuur"])
-            kandidaat_toestellen = _match_toestel_candidates(gevraagd_toestel, alle_toestellen)
-
-            conflict = False
-            conflict_reason = ""
-
-            if dependency_conflict_reason:
-                conflict = True
-                conflict_reason = dependency_conflict_reason
-
-            if planning_type == "hard" and fixed_start_dt is not None:
-                start_dt = fixed_start_dt
-                if dependency_ready_at is not None and start_dt < dependency_ready_at:
+                if chosen_offset < task["min_offset"] or chosen_offset > task["max_offset"]:
                     conflict = True
-                    dependency_time = dependency_ready_at.strftime("%H:%M")
-                    dependency_message = f"Dependency pas klaar om {dependency_time}"
+                    conflict_reason = _append_conflict(
+                        conflict_reason,
+                        f"Gekozen pakketoffset {chosen_offset} buiten venster {task['min_offset']}..{task['max_offset']}",
+                    )
 
-                    if conflict_reason:
-                        conflict_reason += " | "
+                if planning_type == "hard" and chosen_offset != task["preferred_offset"]:
+                    conflict = True
+                    conflict_reason = _append_conflict(
+                        conflict_reason,
+                        "Hard fixed taak buiten verplichte offset",
+                    )
 
-                    conflict_reason += dependency_message
+                if override and override.get("post_override"):
+                    post = str(override["post_override"]).strip()
+                    if post != placement["post"]:
+                        package_status = "Door override gesplitst"
+                        conflict_notes.append("pakketpost door override doorbroken")
+                else:
+                    post, fragmented = _choose_task_post_from_package(task, placement["post"], alle_posten)
+                    if fragmented:
+                        package_status = "Gedeeltelijk andere post"
+                        conflict_notes.append("geen gemeenschappelijke toegelaten pakketpost")
+
+                starttijd = _get_post_starttijd(starturen_map, werkdag_str, post)
+                post_state = _get_post_state(post_states, werkdag, werkdag_str, post, starttijd)
+                fixed_start_dt = _get_fixed_start_dt(werkdag, row_get(h, "heeft_vast_startuur"), row_get(h, "vast_startuur"))
+                kandidaat_toestellen = _match_toestel_candidates(task["gevraagd_toestel"], alle_toestellen)
+
+                earliest_candidates = [post_state["post_available_at"]]
+                if previous_task_end is not None:
+                    earliest_candidates.append(previous_task_end)
+                if fixed_start_dt is not None:
+                    earliest_candidates.append(fixed_start_dt)
+
+                if planning_type == "hard" and fixed_start_dt is not None:
+                    start_dt = fixed_start_dt
+                    if previous_task_end is not None and start_dt < previous_task_end:
+                        conflict = True
+                        conflict_reason = _append_conflict(
+                            conflict_reason,
+                            f"Pakketvolgorde botst met vast startuur; vorige taak klaar om {previous_task_end.strftime('%H:%M')}",
+                        )
+                    if start_dt < post_state["post_available_at"]:
+                        conflict = True
+                        conflict_reason = _append_conflict(conflict_reason, "Post bezet op hard fixed startuur")
+                else:
+                    start_dt = max(earliest_candidates)
+
+                start_dt = _apply_start_override_if_any(start_dt, starttijd, werkdag, override)
+
                 gekozen_toestel = GEEN_TOESTEL
-
                 if kandidaat_toestellen:
-                    gekozen_toestel, _ = _choose_best_toestel_start(
+                    gekozen_toestel, start_dt = _choose_best_toestel_start(
                         kandidaat_toestellen=kandidaat_toestellen,
                         toestel_cursors={
                             t: toestel_cursors.get((werkdag_str, t), datetime.combine(werkdag, time(0, 0)))
@@ -1436,144 +1920,82 @@ def build_planning_df(
                         earliest_start=start_dt,
                     )
 
-                # conflict detectie: post bezet
-                if start_dt < post_state["post_available_at"]:
-                    conflict = True
+                if override and override.get("toestel_override"):
+                    gekozen_toestel = override["toestel_override"]
 
-                    if conflict_reason:
-                        conflict_reason += " | "
-
-                    conflict_reason += "Post bezet op hard fixed startuur"
-
-                # conflict detectie: toestel bezet
                 if gekozen_toestel != GEEN_TOESTEL:
-                    toestel_busy_until = toestel_cursors.get((werkdag_str, gekozen_toestel))
-                    if toestel_busy_until and start_dt < toestel_busy_until:
+                    busy_until = toestel_cursors.get((werkdag_str, gekozen_toestel))
+                    if busy_until and start_dt < busy_until:
                         conflict = True
-                        if conflict_reason:
-                            conflict_reason += " | "
-                        conflict_reason += "Toestel bezet op hard fixed startuur"
+                        conflict_reason = _append_conflict(conflict_reason, "Toestel bezet op gekozen startuur")
 
-            else:
-                earliest_candidates = [post_state["post_available_at"]]
+                actieve_tijd = int(task["actieve_tijd"] or 0)
+                passieve_tijd = int(task["passieve_tijd"] or 0)
+                totale_duur = actieve_tijd + passieve_tijd
+                eind_dt = start_dt + timedelta(minutes=totale_duur)
 
-                if fixed_start_dt is not None:
-                    earliest_candidates.append(fixed_start_dt)
+                planner_debug = _planner_debug_for_task(task, task_placement, conflict_notes)
 
-                if dependency_ready_at is not None:
-                    earliest_candidates.append(dependency_ready_at)
+                task_row = _build_task_row(
+                    menu_item=menu_item,
+                    handeling=h,
+                    serveerdatum=serveerdatum,
+                    werkdag=werkdag,
+                    werkdag_str=werkdag_str,
+                    post=post,
+                    gekozen_toestel=gekozen_toestel,
+                    starttijd=starttijd,
+                    start_dt=start_dt,
+                    eind_dt=eind_dt,
+                    actieve_tijd=actieve_tijd,
+                    passieve_tijd=passieve_tijd,
+                    totale_duur=totale_duur,
+                    stappen_text=task["stappen_text"],
+                    planner_debug=planner_debug,
+                    locked=bool(override and int(override.get("locked") or 0) == 1),
+                    is_vaste_taak=bool(int(row_get(h, "is_vaste_taak", 0) or 0)),
+                    planning_type=planning_type,
+                    conflict=conflict,
+                    conflict_reason=conflict_reason,
+                )
 
-                earliest_start = max(earliest_candidates)
+                task_row["Pakket ID"] = package["package_id"]
+                task_row["Pakket code"] = package["package_code"]
+                task_row["Pakket volgorde"] = index
+                task_row["Pakket status"] = package_status
 
-                if kandidaat_toestellen:
-                    gekozen_toestel, start_dt = _choose_best_toestel_start(
-                        kandidaat_toestellen=kandidaat_toestellen,
-                        toestel_cursors={
-                            t: toestel_cursors.get((werkdag_str, t), datetime.combine(werkdag, time(0, 0)))
-                            for t in kandidaat_toestellen
-                        },
-                        earliest_start=earliest_start,
-                    )
-                else:
-                    gekozen_toestel = GEEN_TOESTEL
-                    start_dt = earliest_start
+                planning_rows.append(task_row)
 
-            eind_dt = start_dt + timedelta(minutes=totale_duur)
+                # Capaciteit: alleen actieve tijd blokkeert post en medewerker.
+                post_state["post_available_at"] = start_dt + timedelta(minutes=actieve_tijd)
+                post_state["active_minutes_since_break"] += actieve_tijd
 
-            task_row = _build_task_row(
-                menu_item=menu_item,
-                handeling=h,
-                serveerdatum=serveerdatum,
-                werkdag=werkdag,
-                werkdag_str=werkdag_str,
-                post=post,
-                gekozen_toestel=gekozen_toestel,
-                starttijd=starttijd,
-                start_dt=start_dt,
-                eind_dt=eind_dt,
-                actieve_tijd=actieve_tijd,
-                passieve_tijd=passieve_tijd,
-                totale_duur=totale_duur,
-                stappen_text=get_stappen_text(conn, h["id"]),
-                planner_debug=planner_debug,
-                locked=bool(override and int(override.get("locked") or 0) == 1),
-                is_vaste_taak=bool(int(row_get(h, "is_vaste_taak", 0) or 0)),
-                planning_type=planning_type,
-                conflict=conflict,
-                conflict_reason=conflict_reason,
-            )
+                # Toestel blijft bezet tot einde totale duur, dus inclusief passieve tijd.
+                if gekozen_toestel != GEEN_TOESTEL:
+                    toestel_cursors[(werkdag_str, gekozen_toestel)] = eind_dt
 
-            planning_id = task_row.get("Planning ID")
-            override = planning_override_map.get(planning_id)
+                previous_task_end = eind_dt
 
-            if override and override.get("toestel_override"):
-                task_row["Toestel"] = override["toestel_override"]
-
-            planning_rows.append(task_row)
-            if parsed_task_code:
-                dependency_group, dependency_step = parsed_task_code
-                dependency_end_by_group_step[(dependency_group, dependency_step)] = eind_dt
-
-            post_block_end = start_dt + timedelta(minutes=actieve_tijd)
-            post_state["post_available_at"] = post_block_end
-            post_state["active_minutes_since_break"] += actieve_tijd
-
-            if gekozen_toestel != GEEN_TOESTEL:
-                toestel_cursors[(werkdag_str, gekozen_toestel)] = eind_dt
-
-            _insert_break_if_needed(
-                planning_rows=planning_rows,
-                post_state=post_state,
-                werkdag=werkdag,
-                werkdag_str=werkdag_str,
-                post=post,
-                starttijd=starttijd,
-            )
+                _insert_break_if_needed(
+                    planning_rows=planning_rows,
+                    post_state=post_state,
+                    werkdag=werkdag,
+                    werkdag_str=werkdag_str,
+                    post=post,
+                    starttijd=starttijd,
+                )
 
     if not planning_rows:
-        return pd.DataFrame(
-            columns=[
-                "Planning ID",
-                "Recept ID",
-                "Handeling ID",
-                "Onderdeel",
-                "Cyclus",
-                "Serveerdag",
-                "Recept",
-                "Prognose aantal",
-                "Menu-groep",
-                "Periode naam",
-                "Taak",
-                "Post",
-                "Toestel",
-                "Werkdag",
-                "Werkdag_iso",
-                "Startuur post",
-                "Start",
-                "Einde",
-                "Actieve tijd",
-                "Passieve tijd",
-                "Totale duur",
-                "Stappen",
-                "Voorkeur offset",
-                "Min offset",
-                "Max offset",
-                "Gekozen offset",
-                "Planner score",
-                "Planner reden",
-                "Planner kandidaatdagen",
-                "Locked",
-                "Is vaste taak",
-                "Planning type",
-                "Actief vanaf",
-                "Actief tot",
-                "Conflict",
-                "Conflict reden",
-            ]
-        )
+        return pd.DataFrame(columns=PLANNING_COLUMNS)
 
     planning_df = pd.DataFrame(planning_rows)
+
+    for col in PLANNING_COLUMNS:
+        if col not in planning_df.columns:
+            planning_df[col] = None
+
     planning_df = planning_df.sort_values(
-        ["Werkdag_iso", "Start", "Post", "Taak"]
+        ["Werkdag_iso", "Start", "Post", "Pakket ID", "Pakket volgorde", "Taak"]
     ).reset_index(drop=True)
-    return planning_df
+
+    return planning_df[PLANNING_COLUMNS]

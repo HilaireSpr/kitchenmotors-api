@@ -454,6 +454,7 @@ def migrate_handelingen_table(conn: sqlite3.Connection) -> None:
 
 
 
+
 def migrate_posten_table(conn: sqlite3.Connection) -> None:
     if not _table_exists(conn, "posten"):
         return

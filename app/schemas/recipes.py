@@ -49,6 +49,8 @@ class HandelingBase(BaseModel):
     naam: str
     post: Optional[str] = None
     toestel: Optional[str] = None
+    post_policy: Optional[str] = "flexible"
+    alternatieve_posten: Optional[str] = None
 
     dag_offset: int = 0
     min_offset_dagen: Optional[int] = 0
@@ -73,6 +75,8 @@ class HandelingUpdateRequest(BaseModel):
     naam: str
     post: Optional[str] = None
     toestel: Optional[str] = None
+    post_policy: Optional[str] = "flexible"
+    alternatieve_posten: Optional[str] = None
 
     dag_offset: int
     min_offset_dagen: Optional[int] = None
