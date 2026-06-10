@@ -13,8 +13,9 @@ GEEN_TOESTEL = "Geen"
 GEEN_POST = "-"
 BREAK_LABEL = "🕒 Pauze"
 
-# 8u werkdag inclusief 30 min pauze = 510 min netto capaciteit
-DEFAULT_CAPACITEIT_MINUTEN = 510
+# Werkdag = 8u30 inclusief 30 min pauze
+# Netto actieve capaciteit = 8u00 = 480 min
+DEFAULT_CAPACITEIT_MINUTEN = 480
 
 # Pauze-logica
 BREAK_AFTER_ACTIVE_MINUTES = 240

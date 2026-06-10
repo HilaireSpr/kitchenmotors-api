@@ -161,7 +161,7 @@ def create_core_tables(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             naam TEXT,
             kleur TEXT,
-            capaciteit_minuten INTEGER DEFAULT 450,
+            capaciteit_minuten INTEGER DEFAULT 480,
             startuur TEXT,
             einduur TEXT,
             actief INTEGER DEFAULT 1,
@@ -461,7 +461,7 @@ def migrate_posten_table(conn: sqlite3.Connection) -> None:
 
     ensure_column(conn, "posten", "naam", "TEXT")
     ensure_column(conn, "posten", "kleur", "TEXT")
-    ensure_column(conn, "posten", "capaciteit_minuten", "INTEGER DEFAULT 450")
+    ensure_column(conn, "posten", "capaciteit_minuten", "INTEGER DEFAULT 480")
     ensure_column(conn, "posten", "startuur", "TEXT")
     ensure_column(conn, "posten", "einduur", "TEXT")
     ensure_column(conn, "posten", "actief", "INTEGER DEFAULT 1")
