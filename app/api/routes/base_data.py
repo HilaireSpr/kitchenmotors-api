@@ -11,7 +11,7 @@ router = APIRouter()
 class PostCreate(BaseModel):
     naam: str
     kleur: str = "#dbeafe"
-    capaciteit_minuten: int = 450
+    capaciteit_minuten: int = 480
 
 
 class ToestelCreate(BaseModel):
@@ -28,7 +28,7 @@ def get_posten():
                 id,
                 naam,
                 COALESCE(kleur, '#dbeafe') AS kleur,
-                COALESCE(capaciteit_minuten, 450) AS capaciteit_minuten
+                COALESCE(capaciteit_minuten, 480) AS capaciteit_minuten
             FROM posten
             ORDER BY naam
             """
@@ -56,6 +56,29 @@ def create_post(post: PostCreate):
     finally:
         conn.close()
 
+class PostUpdate(BaseModel):
+    naam: str
+    kleur: str = "#dbeafe"
+    capaciteit_minuten: int = 480
+
+
+@router.put("/posten/{post_id}")
+def update_post(post_id: int, post: PostUpdate):
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            UPDATE posten
+            SET naam = ?, kleur = ?, capaciteit_minuten = ?
+            WHERE id = ?
+            """,
+            (post.naam, post.kleur, post.capaciteit_minuten, post_id),
+        )
+        conn.commit()
+
+        return {"success": True}
+    finally:
+        conn.close()
 
 @router.delete("/posten/{post_id}")
 def delete_post(post_id: int):
