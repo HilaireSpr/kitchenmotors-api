@@ -162,9 +162,10 @@ def list_planning_starturen():
     try:
         rows = conn.execute(
             """
-            SELECT werkdag, post, starttijd
-            FROM planning_starturen
-            ORDER BY werkdag, post
+            SELECT ps.werkdag, ps.post, ps.starttijd
+            FROM planning_starturen ps
+            INNER JOIN posten p ON p.naam = ps.post
+            ORDER BY ps.werkdag, ps.post
             """
         ).fetchall()
 
