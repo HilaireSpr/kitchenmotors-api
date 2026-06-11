@@ -7,12 +7,17 @@ from app.services.planning import update_startuur
 
 router = APIRouter()
 
-
 class PostCreate(BaseModel):
     naam: str
     kleur: str = "#dbeafe"
     capaciteit_minuten: int = 480
+    startuur: str = "08:00"
 
+class PostUpdate(BaseModel):
+    naam: str
+    kleur: str = "#dbeafe"
+    capaciteit_minuten: int = 480
+    startuur: str = "08:00"
 
 class ToestelCreate(BaseModel):
     naam: str
@@ -28,7 +33,8 @@ def get_posten():
                 id,
                 naam,
                 COALESCE(kleur, '#dbeafe') AS kleur,
-                COALESCE(capaciteit_minuten, 480) AS capaciteit_minuten
+                COALESCE(capaciteit_minuten, 480) AS capaciteit_minuten,
+                COALESCE(startuur, '08:00') AS startuur
             FROM posten
             ORDER BY naam
             """
@@ -45,8 +51,8 @@ def create_post(post: PostCreate):
     try:
         conn.execute(
             """
-            INSERT INTO posten (naam, kleur, capaciteit_minuten)
-            VALUES (?, ?, ?)
+            INSERT INTO posten (naam, kleur, capaciteit_minuten, startuur)
+            VALUES (?, ?, ?,? )
             """,
             (post.naam, post.kleur, post.capaciteit_minuten),
         )
@@ -56,12 +62,6 @@ def create_post(post: PostCreate):
     finally:
         conn.close()
 
-class PostUpdate(BaseModel):
-    naam: str
-    kleur: str = "#dbeafe"
-    capaciteit_minuten: int = 480
-
-
 @router.put("/posten/{post_id}")
 def update_post(post_id: int, post: PostUpdate):
     conn = get_db_connection()
@@ -69,17 +69,22 @@ def update_post(post_id: int, post: PostUpdate):
         conn.execute(
             """
             UPDATE posten
-            SET naam = ?, kleur = ?, capaciteit_minuten = ?
+            SET naam = ?, kleur = ?, capaciteit_minuten = ?, startuur = ?
             WHERE id = ?
             """,
-            (post.naam, post.kleur, post.capaciteit_minuten, post_id),
+            (
+                post.naam,
+                post.kleur,
+                post.capaciteit_minuten,
+                post.startuur,
+                post_id,
+            ),
         )
         conn.commit()
 
         return {"success": True}
     finally:
         conn.close()
-
 @router.delete("/posten/{post_id}")
 def delete_post(post_id: int):
     conn = get_db_connection()

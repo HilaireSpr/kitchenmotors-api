@@ -8,7 +8,7 @@ from typing import Any
 import pandas as pd
 
 
-DEFAULT_STARTTIJD = "08:00"
+DEFAULT_STARTTIJD = "06:00"
 GEEN_TOESTEL = "Geen"
 GEEN_POST = "-"
 BREAK_LABEL = "🕒 Pauze"
@@ -542,6 +542,8 @@ def sync_starturen(
         menu_groep=menu_groep,
     )
 
+    post_starturen = get_post_starturen(conn)
+
     for werkdag, post in required_pairs:
         exists = conn.execute(
             """
@@ -558,11 +560,36 @@ def sync_starturen(
                 INSERT INTO planning_starturen (werkdag, post, starttijd)
                 VALUES (?, ?, ?)
                 """,
-                (werkdag, post, DEFAULT_STARTTIJD),
+                (
+                    werkdag,
+                    post,
+                    post_starturen.get(post, DEFAULT_STARTTIJD),
+                ),
             )
 
     conn.commit()
 
+def get_post_starturen(conn) -> dict[str, str]:
+    rows = conn.execute(
+        """
+        SELECT
+            naam,
+            COALESCE(startuur, ?) AS startuur
+        FROM posten
+        """,
+        (DEFAULT_STARTTIJD,),
+    ).fetchall()
+
+    result: dict[str, str] = {}
+
+    for row in rows:
+        naam = str(row["naam"] or "").strip()
+        startuur = str(row["startuur"] or DEFAULT_STARTTIJD).strip()
+
+        if naam:
+            result[naam] = startuur or DEFAULT_STARTTIJD
+
+    return result
 
 def get_planning_starturen(conn) -> dict[tuple[str, str], str]:
     rows = conn.execute(
