@@ -240,6 +240,13 @@ def create_core_tables(conn: sqlite3.Connection) -> None:
             startuur TEXT DEFAULT '08:00',
             einduur TEXT,
             actief INTEGER DEFAULT 1,
+            actief_maandag INTEGER DEFAULT 1,
+            actief_dinsdag INTEGER DEFAULT 1,
+            actief_woensdag INTEGER DEFAULT 1,
+            actief_donderdag INTEGER DEFAULT 1,
+            actief_vrijdag INTEGER DEFAULT 1,
+            actief_zaterdag INTEGER DEFAULT 1,
+            actief_zondag INTEGER DEFAULT 1,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
@@ -442,6 +449,13 @@ def migrate_posten_table(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "posten", "startuur", "TEXT DEFAULT '08:00'")
     ensure_column(conn, "posten", "einduur", "TEXT")
     ensure_column(conn, "posten", "actief", "INTEGER DEFAULT 1")
+    ensure_column(conn, "posten", "actief_maandag", "INTEGER DEFAULT 1")
+    ensure_column(conn, "posten", "actief_dinsdag", "INTEGER DEFAULT 1")
+    ensure_column(conn, "posten", "actief_woensdag", "INTEGER DEFAULT 1")
+    ensure_column(conn, "posten", "actief_donderdag", "INTEGER DEFAULT 1")
+    ensure_column(conn, "posten", "actief_vrijdag", "INTEGER DEFAULT 1")
+    ensure_column(conn, "posten", "actief_zaterdag", "INTEGER DEFAULT 1")
+    ensure_column(conn, "posten", "actief_zondag", "INTEGER DEFAULT 1")
     ensure_column(conn, "posten", "created_at", "TEXT")
     ensure_column(conn, "posten", "updated_at", "TEXT")
 
@@ -564,6 +578,16 @@ def backfill_posten_defaults(conn: sqlite3.Connection) -> None:
     _safe_execute(conn, "UPDATE posten SET capaciteit_minuten = 480 WHERE capaciteit_minuten IS NULL OR capaciteit_minuten <= 0")
     _safe_execute(conn, "UPDATE posten SET startuur = '08:00' WHERE startuur IS NULL OR TRIM(startuur) = ''")
     _safe_execute(conn, "UPDATE posten SET actief = 1 WHERE actief IS NULL")
+    for col in [
+        "actief_maandag",
+        "actief_dinsdag",
+        "actief_woensdag",
+        "actief_donderdag",
+        "actief_vrijdag",
+        "actief_zaterdag",
+        "actief_zondag",
+    ]:
+        _safe_execute(conn, f"UPDATE posten SET {col} = 1 WHERE {col} IS NULL")
 
 
 def backfill_planning_runs_defaults(conn: sqlite3.Connection) -> None:

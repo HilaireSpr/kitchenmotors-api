@@ -214,6 +214,58 @@ def get_posten(conn) -> list[str]:
 
     return [str(r["naam"]).strip() for r in rows if str(r["naam"]).strip()]
 
+def get_post_weekdag_actief_map(conn) -> dict[str, dict[int, bool]]:
+    rows = conn.execute(
+        """
+        SELECT
+            naam,
+            COALESCE(actief_maandag, 1) AS actief_maandag,
+            COALESCE(actief_dinsdag, 1) AS actief_dinsdag,
+            COALESCE(actief_woensdag, 1) AS actief_woensdag,
+            COALESCE(actief_donderdag, 1) AS actief_donderdag,
+            COALESCE(actief_vrijdag, 1) AS actief_vrijdag,
+            COALESCE(actief_zaterdag, 1) AS actief_zaterdag,
+            COALESCE(actief_zondag, 1) AS actief_zondag
+        FROM posten
+        WHERE COALESCE(actief, 1) = 1
+        """
+    ).fetchall()
+
+    result: dict[str, dict[int, bool]] = {}
+
+    for row in rows:
+        naam = str(row["naam"] or "").strip()
+        if not naam:
+            continue
+
+        result[naam] = {
+            0: bool(int(row["actief_maandag"] or 0)),
+            1: bool(int(row["actief_dinsdag"] or 0)),
+            2: bool(int(row["actief_woensdag"] or 0)),
+            3: bool(int(row["actief_donderdag"] or 0)),
+            4: bool(int(row["actief_vrijdag"] or 0)),
+            5: bool(int(row["actief_zaterdag"] or 0)),
+            6: bool(int(row["actief_zondag"] or 0)),
+        }
+
+    return result
+
+
+def _filter_posts_active_on_day(
+    posten: list[str],
+    werkdag: date,
+    post_weekdag_actief_map: dict[str, dict[int, bool]],
+) -> list[str]:
+    weekday_index = werkdag.weekday()
+
+    result = [
+        post
+        for post in posten
+        if post_weekdag_actief_map.get(post, {}).get(weekday_index, True)
+    ]
+
+    return result
+
 # =========================================================
 # LEGACY MENU GENERATIE (oude flow, behouden voor compatibiliteit)
 # =========================================================
@@ -1776,13 +1828,24 @@ def _choose_package_placement(
     post_capaciteiten: dict[str, int],
     alle_posten: list[str],
     serveerdatum: date,
+    post_weekdag_actief_map: dict[str, dict[int, bool]],
 ) -> dict:
     offsets = _candidate_package_offsets(package["tasks"])
     posts = _candidate_package_posts(package["tasks"], alle_posten)
 
     candidates = []
     for offset in offsets:
-        for post in posts:
+        werkdag = serveerdatum + timedelta(days=offset)
+        active_posts = _filter_posts_active_on_day(
+            posten=posts,
+            werkdag=werkdag,
+            post_weekdag_actief_map=post_weekdag_actief_map,
+        )
+
+        if not active_posts:
+            continue
+
+        for post in active_posts:
             score, debug = _score_package_candidate(
                 package=package,
                 offset=offset,
@@ -1796,6 +1859,20 @@ def _choose_package_placement(
             )
             candidates.append({"offset": offset, "post": post, "score": score, "debug": debug})
 
+    if not candidates:
+        fallback_offset = offsets[0] if offsets else 0
+        fallback_werkdag = serveerdatum + timedelta(days=fallback_offset)
+        fallback_post = package["tasks"][0]["standaard_post"]
+
+        return {
+            "offset": fallback_offset,
+            "werkdag": fallback_werkdag,
+            "werkdag_str": fallback_werkdag.isoformat(),
+            "post": fallback_post,
+            "score": ("geen_actieve_post",),
+            "reason": "Geen actieve toegelaten post op kandidaatdagen",
+            "candidate_debug_text": "Geen actieve toegelaten post gevonden volgens post-weekdagen.",
+        }
     best = min(candidates, key=lambda c: c["score"])
     werkdag = serveerdatum + timedelta(days=best["offset"])
 
@@ -1889,6 +1966,7 @@ def build_planning_df(
     starturen_map = get_planning_starturen(conn)
     alle_toestellen = get_toestellen(conn)
     post_capaciteiten = get_post_capaciteiten(conn)
+    post_weekdag_actief_map = get_post_weekdag_actief_map(conn)
     alle_posten = sorted([post for post in post_capaciteiten.keys() if post and post != GEEN_POST])
     if not alle_posten:
         alle_posten = get_posten(conn)
@@ -1953,6 +2031,7 @@ def build_planning_df(
                 post_capaciteiten=post_capaciteiten,
                 alle_posten=alle_posten,
                 serveerdatum=serveerdatum,
+                post_weekdag_actief_map=post_weekdag_actief_map,
             )
 
             previous_task_end: datetime | None = None

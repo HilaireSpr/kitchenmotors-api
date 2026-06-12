@@ -12,12 +12,26 @@ class PostCreate(BaseModel):
     kleur: str = "#dbeafe"
     capaciteit_minuten: int = 480
     startuur: str = "08:00"
+    actief_maandag: int = 1
+    actief_dinsdag: int = 1
+    actief_woensdag: int = 1
+    actief_donderdag: int = 1
+    actief_vrijdag: int = 1
+    actief_zaterdag: int = 1
+    actief_zondag: int = 1
 
 class PostUpdate(BaseModel):
     naam: str
     kleur: str = "#dbeafe"
     capaciteit_minuten: int = 480
     startuur: str = "08:00"
+    actief_maandag: int = 1
+    actief_dinsdag: int = 1
+    actief_woensdag: int = 1
+    actief_donderdag: int = 1
+    actief_vrijdag: int = 1
+    actief_zaterdag: int = 1
+    actief_zondag: int = 1
 
 class ToestelCreate(BaseModel):
     naam: str
@@ -34,7 +48,14 @@ def get_posten():
                 naam,
                 COALESCE(kleur, '#dbeafe') AS kleur,
                 COALESCE(capaciteit_minuten, 480) AS capaciteit_minuten,
-                COALESCE(startuur, '08:00') AS startuur
+                COALESCE(startuur, '08:00') AS startuur,
+                COALESCE(actief_maandag, 1) AS actief_maandag,
+                COALESCE(actief_dinsdag, 1) AS actief_dinsdag,
+                COALESCE(actief_woensdag, 1) AS actief_woensdag,
+                COALESCE(actief_donderdag, 1) AS actief_donderdag,
+                COALESCE(actief_vrijdag, 1) AS actief_vrijdag,
+                COALESCE(actief_zaterdag, 1) AS actief_zaterdag,
+                COALESCE(actief_zondag, 1) AS actief_zondag
             FROM posten
             ORDER BY naam
             """
@@ -51,10 +72,34 @@ def create_post(post: PostCreate):
     try:
         conn.execute(
             """
-            INSERT INTO posten (naam, kleur, capaciteit_minuten, startuur)
-            VALUES (?, ?, ?,? )
+            INSERT INTO posten (
+                naam,
+                kleur,
+                capaciteit_minuten,
+                startuur,
+                actief_maandag,
+                actief_dinsdag,
+                actief_woensdag,
+                actief_donderdag,
+                actief_vrijdag,
+                actief_zaterdag,
+                actief_zondag
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (post.naam, post.kleur, post.capaciteit_minuten),
+            (
+                post.naam,
+                post.kleur,
+                post.capaciteit_minuten,
+                post.startuur,
+                post.actief_maandag,
+                post.actief_dinsdag,
+                post.actief_woensdag,
+                post.actief_donderdag,
+                post.actief_vrijdag,
+                post.actief_zaterdag,
+                post.actief_zondag,
+            ),
         )
         conn.commit()
 
@@ -69,7 +114,18 @@ def update_post(post_id: int, post: PostUpdate):
         conn.execute(
             """
             UPDATE posten
-            SET naam = ?, kleur = ?, capaciteit_minuten = ?, startuur = ?
+            SET
+                naam = ?,
+                kleur = ?,
+                capaciteit_minuten = ?,
+                startuur = ?,
+                actief_maandag = ?,
+                actief_dinsdag = ?,
+                actief_woensdag = ?,
+                actief_donderdag = ?,
+                actief_vrijdag = ?,
+                actief_zaterdag = ?,
+                actief_zondag = ?
             WHERE id = ?
             """,
             (
@@ -77,6 +133,13 @@ def update_post(post_id: int, post: PostUpdate):
                 post.kleur,
                 post.capaciteit_minuten,
                 post.startuur,
+                post.actief_maandag,
+                post.actief_dinsdag,
+                post.actief_woensdag,
+                post.actief_donderdag,
+                post.actief_vrijdag,
+                post.actief_zaterdag,
+                post.actief_zondag,
                 post_id,
             ),
         )
