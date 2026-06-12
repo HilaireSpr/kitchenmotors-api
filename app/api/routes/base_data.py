@@ -191,3 +191,22 @@ def save_planning_startuur(payload: PlanningStartuurUpdateRequest):
         return {"success": True}
     finally:
         conn.close()
+
+@router.delete("/planning-starturen/reset")
+def reset_planning_starturen():
+    conn = get_db_connection()
+    try:
+        deleted_count = conn.execute(
+            """
+            DELETE FROM planning_starturen
+            """
+        ).rowcount
+
+        conn.commit()
+
+        return {
+            "success": True,
+            "deleted_count": deleted_count,
+        }
+    finally:
+        conn.close()
