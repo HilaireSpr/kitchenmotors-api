@@ -1878,6 +1878,14 @@ def build_planning_df(
     - passieve tijd bepaalt wel de taak-eindtijd en toestelbezetting, maar niet de postcapaciteit;
     - bestaande overrides blijven taakniveau-ingrepen van de menselijke planner.
     """
+    sync_starturen(
+        conn=conn,
+        start_monday=start_monday,
+        start_week=start_week,
+        cycles=cycles,
+        menu_groep=menu_groep,
+    )
+
     starturen_map = get_planning_starturen(conn)
     alle_toestellen = get_toestellen(conn)
     post_capaciteiten = get_post_capaciteiten(conn)
