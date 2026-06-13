@@ -131,6 +131,9 @@ def update_handeling_endpoint(handeling_id: int, payload: HandelingUpdateRequest
             is_vaste_taak=payload.is_vaste_taak,
             heeft_vast_startuur=payload.heeft_vast_startuur,
             vast_startuur=payload.vast_startuur,
+            planning_type=payload.planning_type,
+            actief_vanaf=payload.actief_vanaf,
+            actief_tot=payload.actief_tot,
         )
 
         if not result:
