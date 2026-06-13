@@ -1790,18 +1790,23 @@ def _score_package_candidate(
         fixed_violation_count,
         offset_violation_count,
 
-        # Capaciteit moet vroeger winnen dan pakket-/postvoorkeur.
+        # Capaciteit wint nu duidelijk van voorkeurspost.
         overload_penalty,
         high_load_penalty,
-        projected_ratio_points,
         over_capacity_minutes,
+        projected_ratio_points,
 
-        # Daarna pas pakketcohesie en praktische volgorde.
+        # Pakket liefst samenhouden.
         fragmentation_count,
-        wait_minutes,
-        preference_distance,
+
+        # Voorkeurspost blijft belangrijk, maar niet belangrijker dan capaciteit.
         non_preferred_post_count,
 
+        # Daarna pas wachttijd en afstand tot voorkeursdag.
+        wait_minutes,
+        preference_distance,
+
+        # Stabiele sortering.
         offset,
         package_post,
     )
@@ -1810,6 +1815,7 @@ def _score_package_candidate(
         f"{werkdag_str}/{package_post}: score={score}, "
         f"loads={projected_load_debug}, "
         f"overcap={over_capacity_minutes}, "
+        f"overload_penalty={overload_penalty}, "
         f"high_load_penalty={high_load_penalty}, "
         f"fragments={fragmentation_count}, "
         f"offset_violations={offset_violation_count}, "
