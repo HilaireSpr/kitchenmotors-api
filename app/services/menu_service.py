@@ -443,3 +443,271 @@ def update_menu_item(
 def delete_menu_item(conn, menu_item_id: int):
     conn.execute("DELETE FROM menu WHERE id = ?", (menu_item_id,))
     conn.commit()
+
+def export_menu_group(conn, menu_groep: str) -> dict:
+    menu_rows = conn.execute(
+        """
+        SELECT *
+        FROM menu
+        WHERE COALESCE(status, 'active') = 'active'
+          AND menu_groep = ?
+        ORDER BY serveerdag, cyclus_week, cyclus_dag, recept_id
+        """,
+        (menu_groep,),
+    ).fetchall()
+
+    recept_ids = sorted({row["recept_id"] for row in menu_rows})
+
+    recipes = []
+    for recept_id in recept_ids:
+        recept = conn.execute(
+            """
+            SELECT *
+            FROM recepten
+            WHERE id = ?
+            """,
+            (recept_id,),
+        ).fetchone()
+
+        if not recept:
+            continue
+
+        handelingen = conn.execute(
+            """
+            SELECT *
+            FROM handelingen
+            WHERE recept_id = ?
+            ORDER BY sort_order, id
+            """,
+            (recept_id,),
+        ).fetchall()
+
+        handeling_ids = [h["id"] for h in handelingen]
+        stappen = []
+
+        if handeling_ids:
+            placeholders = ",".join(["?"] * len(handeling_ids))
+            stappen = conn.execute(
+                f"""
+                SELECT *
+                FROM stappen
+                WHERE handeling_id IN ({placeholders})
+                ORDER BY handeling_id, sort_order, id
+                """,
+                handeling_ids,
+            ).fetchall()
+
+        recipes.append(
+            {
+                "recept": dict(recept),
+                "handelingen": [dict(h) for h in handelingen],
+                "stappen": [dict(s) for s in stappen],
+            }
+        )
+
+    return {
+        "version": 1,
+        "type": "kitchenmotors_menu_group_export",
+        "menu_groep": menu_groep,
+        "menu_items": [dict(row) for row in menu_rows],
+        "recipes": recipes,
+    }
+
+
+def import_menu_group(conn, payload: dict, target_menu_groep: str | None = None) -> dict:
+    source_menu_groep = payload.get("menu_groep") or "Geïmporteerde menu-groep"
+    effective_menu_groep = (target_menu_groep or f"{source_menu_groep} - lokaal test").strip()
+
+    recipe_id_map: dict[int, int] = {}
+    handeling_id_map: dict[int, int] = {}
+
+    imported_recipes = 0
+    reused_recipes = 0
+    imported_handelingen = 0
+    imported_stappen = 0
+    imported_menu_items = 0
+
+    for recipe_bundle in payload.get("recipes", []):
+        recept = recipe_bundle.get("recept", {})
+        old_recept_id = recept.get("id")
+        code = str(recept.get("code") or "").strip()
+
+        if not code:
+            continue
+
+        existing = conn.execute(
+            """
+            SELECT id
+            FROM recepten
+            WHERE code = ?
+            """,
+            (code,),
+        ).fetchone()
+
+        if existing:
+            new_recept_id = int(existing["id"])
+            reused_recipes += 1
+        else:
+            cursor = conn.execute(
+                """
+                INSERT INTO recepten (
+                    code,
+                    naam,
+                    categorie,
+                    menu_groep
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    code,
+                    recept.get("naam"),
+                    recept.get("categorie"),
+                    effective_menu_groep,
+                ),
+            )
+            new_recept_id = int(cursor.lastrowid)
+            imported_recipes += 1
+
+        if old_recept_id:
+            recipe_id_map[int(old_recept_id)] = new_recept_id
+
+        for handeling in recipe_bundle.get("handelingen", []):
+            old_handeling_id = handeling.get("id")
+
+            cursor = conn.execute(
+                """
+                INSERT INTO handelingen (
+                    recept_id,
+                    code,
+                    naam,
+                    sort_order,
+                    post,
+                    toestel,
+                    post_policy,
+                    alternatieve_posten,
+                    dag_offset,
+                    min_offset_dagen,
+                    max_offset_dagen,
+                    passieve_tijd,
+                    is_vaste_taak,
+                    heeft_vast_startuur,
+                    vast_startuur,
+                    planning_type,
+                    actief_vanaf,
+                    actief_tot
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    new_recept_id,
+                    handeling.get("code"),
+                    handeling.get("naam"),
+                    handeling.get("sort_order"),
+                    handeling.get("post"),
+                    handeling.get("toestel"),
+                    handeling.get("post_policy") or "fixed",
+                    handeling.get("alternatieve_posten"),
+                    handeling.get("dag_offset") or 0,
+                    handeling.get("min_offset_dagen") or 0,
+                    handeling.get("max_offset_dagen") or 0,
+                    handeling.get("passieve_tijd") or 0,
+                    handeling.get("is_vaste_taak") or 0,
+                    handeling.get("heeft_vast_startuur") or 0,
+                    handeling.get("vast_startuur"),
+                    handeling.get("planning_type") or "floating",
+                    handeling.get("actief_vanaf"),
+                    handeling.get("actief_tot"),
+                ),
+            )
+
+            new_handeling_id = int(cursor.lastrowid)
+            imported_handelingen += 1
+
+            if old_handeling_id:
+                handeling_id_map[int(old_handeling_id)] = new_handeling_id
+
+        for stap in recipe_bundle.get("stappen", []):
+            old_handeling_id = stap.get("handeling_id")
+            if not old_handeling_id:
+                continue
+
+            new_handeling_id = handeling_id_map.get(int(old_handeling_id))
+            if not new_handeling_id:
+                continue
+
+            conn.execute(
+                """
+                INSERT INTO stappen (
+                    handeling_id,
+                    naam,
+                    tijd,
+                    sort_order
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    new_handeling_id,
+                    stap.get("naam"),
+                    stap.get("tijd") or 0,
+                    stap.get("sort_order"),
+                ),
+            )
+            imported_stappen += 1
+
+    for item in payload.get("menu_items", []):
+        old_recept_id = item.get("recept_id")
+        if not old_recept_id:
+            continue
+
+        new_recept_id = recipe_id_map.get(int(old_recept_id))
+        if not new_recept_id:
+            continue
+
+        conn.execute(
+            """
+            INSERT INTO menu (
+                recept_id,
+                cyclus_week,
+                cyclus_dag,
+                serveerdag,
+                menu_groep,
+                ritme_type,
+                ritme_interval_weken,
+                bron,
+                prognose_aantal,
+                periode_naam,
+                is_exception,
+                opmerking,
+                status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                new_recept_id,
+                item.get("cyclus_week"),
+                item.get("cyclus_dag"),
+                item.get("serveerdag"),
+                effective_menu_groep,
+                item.get("ritme_type"),
+                item.get("ritme_interval_weken"),
+                "import",
+                item.get("prognose_aantal"),
+                item.get("periode_naam"),
+                item.get("is_exception") or 0,
+                item.get("opmerking"),
+                "active",
+            ),
+        )
+        imported_menu_items += 1
+
+    conn.commit()
+
+    return {
+        "success": True,
+        "menu_groep": effective_menu_groep,
+        "imported_recipes": imported_recipes,
+        "reused_recipes": reused_recipes,
+        "imported_handelingen": imported_handelingen,
+        "imported_stappen": imported_stappen,
+        "imported_menu_items": imported_menu_items,
+    }

@@ -1769,7 +1769,7 @@ def _score_package_candidate(
         # 90-100% = zwaar
         # >100% = alleen als er geen goed alternatief is
         if ratio > 1:
-            overload_penalty += 10000 + over_minutes * 25 + int((ratio - 1) * 5000)
+            overload_penalty += 50000 + over_minutes * 150 + int((ratio - 1) * 20000)
         elif ratio >= 0.9:
             high_load_penalty += 3000 + int((ratio - 0.9) * 3000)
         elif ratio >= 0.8:
@@ -1797,10 +1797,10 @@ def _score_package_candidate(
         projected_ratio_points,
 
         # Pakket liefst samenhouden.
-        fragmentation_count,
+        fragmentation_count * 2,
 
         # Voorkeurspost blijft belangrijk, maar niet belangrijker dan capaciteit.
-        non_preferred_post_count,
+        non_preferred_post_count * 2,
 
         # Daarna pas wachttijd en afstand tot voorkeursdag.
         wait_minutes,

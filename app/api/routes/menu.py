@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Body
 
 from app.db import get_db_connection
 from app.schemas.menu import (
@@ -14,6 +14,8 @@ from app.services.menu_service import (
     create_menu_item,
     create_menu_override,
     delete_menu_item,
+    export_menu_group,
+    import_menu_group,
     generate_menu_for_selection,
     get_menu_items,
     get_recept_selectie,
@@ -69,6 +71,35 @@ def get_menu_items_endpoint():
     finally:
         conn.close()
 
+@router.get("/export/{menu_groep}")
+def export_menu_group_endpoint(menu_groep: str):
+    conn = get_db_connection()
+    try:
+        result = export_menu_group(conn, menu_groep)
+
+        if not result.get("menu_items"):
+            raise HTTPException(status_code=404, detail="Menu-groep niet gevonden of leeg")
+
+        return {"success": True, "result": result}
+    finally:
+        conn.close()
+
+
+@router.post("/import")
+def import_menu_group_endpoint(payload: dict = Body(...)):
+    conn = get_db_connection()
+    try:
+        result = import_menu_group(
+            conn=conn,
+            payload=payload.get("export") or payload,
+            target_menu_groep=payload.get("target_menu_groep"),
+        )
+
+        return {"success": True, "result": result}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        conn.close()
 
 @router.post("/items")
 def create_menu_item_endpoint(payload: MenuItemCreateRequest):
