@@ -574,54 +574,70 @@ def import_menu_group(conn, payload: dict, target_menu_groep: str | None = None)
         for handeling in recipe_bundle.get("handelingen", []):
             old_handeling_id = handeling.get("id")
 
-            cursor = conn.execute(
+            existing_handeling = conn.execute(
                 """
-                INSERT INTO handelingen (
-                    recept_id,
-                    code,
-                    naam,
-                    sort_order,
-                    post,
-                    toestel,
-                    post_policy,
-                    alternatieve_posten,
-                    dag_offset,
-                    min_offset_dagen,
-                    max_offset_dagen,
-                    passieve_tijd,
-                    is_vaste_taak,
-                    heeft_vast_startuur,
-                    vast_startuur,
-                    planning_type,
-                    actief_vanaf,
-                    actief_tot
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                SELECT id
+                FROM handelingen
+                WHERE recept_id = ?
+                AND code = ?
                 """,
                 (
                     new_recept_id,
                     handeling.get("code"),
-                    handeling.get("naam"),
-                    handeling.get("sort_order"),
-                    handeling.get("post"),
-                    handeling.get("toestel"),
-                    handeling.get("post_policy") or "fixed",
-                    handeling.get("alternatieve_posten"),
-                    handeling.get("dag_offset") or 0,
-                    handeling.get("min_offset_dagen") or 0,
-                    handeling.get("max_offset_dagen") or 0,
-                    handeling.get("passieve_tijd") or 0,
-                    handeling.get("is_vaste_taak") or 0,
-                    handeling.get("heeft_vast_startuur") or 0,
-                    handeling.get("vast_startuur"),
-                    handeling.get("planning_type") or "floating",
-                    handeling.get("actief_vanaf"),
-                    handeling.get("actief_tot"),
                 ),
-            )
+            ).fetchone()
 
-            new_handeling_id = int(cursor.lastrowid)
-            imported_handelingen += 1
+            if existing_handeling:
+                new_handeling_id = int(existing_handeling["id"])
+            else:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO handelingen (
+                        recept_id,
+                        code,
+                        naam,
+                        sort_order,
+                        post,
+                        toestel,
+                        post_policy,
+                        alternatieve_posten,
+                        dag_offset,
+                        min_offset_dagen,
+                        max_offset_dagen,
+                        passieve_tijd,
+                        is_vaste_taak,
+                        heeft_vast_startuur,
+                        vast_startuur,
+                        planning_type,
+                        actief_vanaf,
+                        actief_tot
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        new_recept_id,
+                        handeling.get("code"),
+                        handeling.get("naam"),
+                        handeling.get("sort_order"),
+                        handeling.get("post"),
+                        handeling.get("toestel"),
+                        handeling.get("post_policy") or "fixed",
+                        handeling.get("alternatieve_posten"),
+                        handeling.get("dag_offset") or 0,
+                        handeling.get("min_offset_dagen") or 0,
+                        handeling.get("max_offset_dagen") or 0,
+                        handeling.get("passieve_tijd") or 0,
+                        handeling.get("is_vaste_taak") or 0,
+                        handeling.get("heeft_vast_startuur") or 0,
+                        handeling.get("vast_startuur"),
+                        handeling.get("planning_type") or "floating",
+                        handeling.get("actief_vanaf"),
+                        handeling.get("actief_tot"),
+                    ),
+                )
+
+                new_handeling_id = int(cursor.lastrowid)
+                imported_handelingen += 1
 
             if old_handeling_id:
                 handeling_id_map[int(old_handeling_id)] = new_handeling_id
@@ -633,6 +649,24 @@ def import_menu_group(conn, payload: dict, target_menu_groep: str | None = None)
 
             new_handeling_id = handeling_id_map.get(int(old_handeling_id))
             if not new_handeling_id:
+                continue
+
+            existing_stap = conn.execute(
+                """
+                SELECT id
+                FROM stappen
+                WHERE handeling_id = ?
+                AND COALESCE(sort_order, -1) = COALESCE(?, -1)
+                AND COALESCE(naam, '') = COALESCE(?, '')
+                """,
+                (
+                    new_handeling_id,
+                    stap.get("sort_order"),
+                    stap.get("naam"),
+                ),
+            ).fetchone()
+
+            if existing_stap:
                 continue
 
             conn.execute(
