@@ -61,6 +61,7 @@ class HandelingBase(BaseModel):
     is_vaste_taak: Optional[bool] = False
     heeft_vast_startuur: Optional[bool] = False
     vast_startuur: Optional[str] = None
+    deadline_time: Optional[str] = None
 
     planning_type: Optional[str] = "floating"
     actief_vanaf: Optional[date] = None
@@ -87,6 +88,7 @@ class HandelingUpdateRequest(BaseModel):
     is_vaste_taak: Optional[bool] = False
     heeft_vast_startuur: Optional[bool] = False
     vast_startuur: Optional[str] = None
+    deadline_time: Optional[str] = None
 
     planning_type: Optional[str] = "floating"
     actief_vanaf: Optional[date] = None

@@ -131,6 +131,7 @@ def create_core_tables(conn: sqlite3.Connection) -> None:
             opmerkingen TEXT,
             heeft_vast_startuur INTEGER DEFAULT 0,
             vast_startuur TEXT DEFAULT '',
+            deadline_time TEXT,
             is_vaste_taak INTEGER DEFAULT 0,
             planning_type TEXT DEFAULT 'floating',
             actief_vanaf TEXT,
@@ -379,6 +380,7 @@ def migrate_handelingen_table(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "handelingen", "opmerkingen", "TEXT")
     ensure_column(conn, "handelingen", "heeft_vast_startuur", "INTEGER DEFAULT 0")
     ensure_column(conn, "handelingen", "vast_startuur", "TEXT DEFAULT ''")
+    ensure_column(conn, "handelingen", "deadline_time", "TEXT")
     ensure_column(conn, "handelingen", "is_vaste_taak", "INTEGER DEFAULT 0")
     ensure_column(conn, "handelingen", "planning_type", "TEXT DEFAULT 'floating'")
     ensure_column(conn, "handelingen", "actief_vanaf", "TEXT")

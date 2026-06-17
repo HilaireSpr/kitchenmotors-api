@@ -103,6 +103,7 @@ def get_recipe_detail(conn, recept_code: str) -> dict | None:
             is_vaste_taak,
             heeft_vast_startuur,
             vast_startuur,
+            deadline_time,
             planning_type,
             actief_vanaf,
             actief_tot
@@ -178,6 +179,7 @@ def get_recipe_detail(conn, recept_code: str) -> dict | None:
                 "totale_duur": actieve_tijd + passieve_tijd,
                 "heeft_vast_startuur": bool(row["heeft_vast_startuur"]),
                 "vast_startuur": row["vast_startuur"] or "",
+                "deadline_time": row["deadline_time"] or "",
                 "planning_type": _normalize_planning_type(row["planning_type"]),
                 "actief_vanaf": row["actief_vanaf"],
                 "actief_tot": row["actief_tot"],
@@ -252,6 +254,7 @@ def create_handeling(
     is_vaste_taak=False,
     heeft_vast_startuur=False,
     vast_startuur=None,
+    deadline_time=None,
     planning_type=None,
     actief_vanaf=None,
     actief_tot=None,
@@ -297,11 +300,12 @@ def create_handeling(
             is_vaste_taak,
             heeft_vast_startuur,
             vast_startuur,
+            deadline_time,
             planning_type,
             actief_vanaf,
             actief_tot
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             recept_id,
@@ -319,6 +323,7 @@ def create_handeling(
             1 if is_vaste_taak else 0,
             1 if heeft_vast_startuur else 0,
             _normalize_optional_text(vast_startuur),
+            _normalize_optional_text(deadline_time),
             _normalize_planning_type(planning_type),
             _normalize_optional_text(actief_vanaf),
             _normalize_optional_text(actief_tot),
@@ -408,6 +413,7 @@ def update_handeling(
     is_vaste_taak,
     heeft_vast_startuur=False,
     vast_startuur=None,
+    deadline_time=None,
     planning_type=None,
     actief_vanaf=None,
     actief_tot=None,
@@ -432,6 +438,8 @@ def update_handeling(
     normalized_post_policy = _normalize_optional_text(post_policy) or "flexible"
     normalized_alternatieve_posten = _normalize_optional_text(alternatieve_posten)
     normalized_planning_type = _normalize_planning_type(planning_type)
+
+    deadline_time_value = _normalize_optional_text(deadline_time)
 
     normalized_actief_vanaf = (
         actief_vanaf.isoformat()
@@ -470,6 +478,7 @@ def update_handeling(
             is_vaste_taak = ?,
             heeft_vast_startuur = ?,
             vast_startuur = ?,
+            deadline_time = ?,
             planning_type = ?,
             actief_vanaf = ?,
             actief_tot = ?
@@ -488,6 +497,7 @@ def update_handeling(
             1 if is_vaste_taak else 0,
             heeft_vast_startuur_value,
             vast_startuur_value,
+            deadline_time_value,
             normalized_planning_type,
             normalized_actief_vanaf,
             normalized_actief_tot,
@@ -514,6 +524,7 @@ def update_handeling(
             is_vaste_taak,
             heeft_vast_startuur,
             vast_startuur,
+            deadline_time,
             planning_type,
             actief_vanaf,
             actief_tot
@@ -544,6 +555,7 @@ def update_handeling(
         "is_vaste_taak": bool(updated["is_vaste_taak"]),
         "heeft_vast_startuur": bool(updated["heeft_vast_startuur"]),
         "vast_startuur": updated["vast_startuur"],
+        "deadline_time": updated["deadline_time"],
         "planning_type": _normalize_planning_type(updated["planning_type"]),
         "actief_vanaf": updated["actief_vanaf"],
         "actief_tot": updated["actief_tot"],
