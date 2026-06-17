@@ -69,6 +69,89 @@ def normalize_toestel(value: Any) -> str:
 
     return value
 
+def _intervals_overlap(start_a: datetime, end_a: datetime, start_b: datetime, end_b: datetime) -> bool:
+    return start_a < end_b and start_b < end_a
+
+
+def _get_device_intervals(
+    toestel_bezetting: dict[tuple[str, str], list[tuple[datetime, datetime, str]]],
+    werkdag_str: str,
+    toestel: str,
+) -> list[tuple[datetime, datetime, str]]:
+    toestel = normalize_toestel(toestel)
+    if toestel == GEEN_TOESTEL:
+        return []
+
+    return toestel_bezetting.get((werkdag_str, toestel), [])
+
+
+def _is_toestel_available(
+    toestel_bezetting: dict[tuple[str, str], list[tuple[datetime, datetime, str]]],
+    werkdag_str: str,
+    toestel: str,
+    start_dt: datetime,
+    eind_dt: datetime,
+) -> bool:
+    toestel = normalize_toestel(toestel)
+    if toestel == GEEN_TOESTEL:
+        return True
+
+    for existing_start, existing_end, _planning_id in _get_device_intervals(
+        toestel_bezetting,
+        werkdag_str,
+        toestel,
+    ):
+        if _intervals_overlap(start_dt, eind_dt, existing_start, existing_end):
+            return False
+
+    return True
+
+
+def _reserve_toestel(
+    toestel_bezetting: dict[tuple[str, str], list[tuple[datetime, datetime, str]]],
+    werkdag_str: str,
+    toestel: str,
+    start_dt: datetime,
+    eind_dt: datetime,
+    planning_id: str,
+) -> None:
+    toestel = normalize_toestel(toestel)
+    if toestel == GEEN_TOESTEL:
+        return
+
+    key = (werkdag_str, toestel)
+    toestel_bezetting.setdefault(key, []).append((start_dt, eind_dt, planning_id))
+    toestel_bezetting[key].sort(key=lambda item: item[0])
+
+
+def _find_first_available_toestel_start(
+    toestel_bezetting: dict[tuple[str, str], list[tuple[datetime, datetime, str]]],
+    werkdag_str: str,
+    toestel: str,
+    earliest_start: datetime,
+    duration_minutes: int,
+) -> datetime:
+    toestel = normalize_toestel(toestel)
+    if toestel == GEEN_TOESTEL:
+        return earliest_start
+
+    candidate_start = earliest_start
+    duration = timedelta(minutes=max(0, int(duration_minutes or 0)))
+
+    for existing_start, existing_end, _planning_id in _get_device_intervals(
+        toestel_bezetting,
+        werkdag_str,
+        toestel,
+    ):
+        candidate_end = candidate_start + duration
+
+        if candidate_end <= existing_start:
+            return candidate_start
+
+        if _intervals_overlap(candidate_start, candidate_end, existing_start, existing_end):
+            candidate_start = existing_end
+
+    return candidate_start
 
 def row_get(row: Any, key: str, default=None):
     try:
@@ -2002,6 +2085,7 @@ def build_planning_df(
     planning_rows: list[dict] = []
     post_states: dict[tuple[str, str], dict] = {}
     toestel_cursors: dict[tuple[str, str], datetime] = {}
+    toestel_bezetting: dict[tuple[str, str], list[tuple[datetime, datetime, str]]] = {}
 
     for menu_item in menu_items:
         serveerdatum = parse_iso_date(menu_item["serveerdag"])
@@ -2125,30 +2209,51 @@ def build_planning_df(
 
                 start_dt = _apply_start_override_if_any(start_dt, starttijd, werkdag, override)
 
-                gekozen_toestel = GEEN_TOESTEL
-                if kandidaat_toestellen:
-                    gekozen_toestel, start_dt = _choose_best_toestel_start(
-                        kandidaat_toestellen=kandidaat_toestellen,
-                        toestel_cursors={
-                            t: toestel_cursors.get((werkdag_str, t), datetime.combine(werkdag, time(0, 0)))
-                            for t in kandidaat_toestellen
-                        },
-                        earliest_start=start_dt,
-                    )
-
-                if override and override.get("toestel_override"):
-                    gekozen_toestel = override["toestel_override"]
-
-                if gekozen_toestel != GEEN_TOESTEL:
-                    busy_until = toestel_cursors.get((werkdag_str, gekozen_toestel))
-                    if busy_until and start_dt < busy_until:
-                        conflict = True
-                        conflict_reason = _append_conflict(conflict_reason, "Toestel bezet op gekozen startuur")
-
                 actieve_tijd = int(task["actieve_tijd"] or 0)
                 passieve_tijd = int(task["passieve_tijd"] or 0)
                 totale_duur = actieve_tijd + passieve_tijd
+
+                gekozen_toestel = GEEN_TOESTEL
+
+                if override and override.get("toestel_override"):
+                    gekozen_toestel = normalize_toestel(override["toestel_override"])
+                elif kandidaat_toestellen:
+                    beste_toestel = None
+                    beste_start = None
+
+                    for toestel in kandidaat_toestellen:
+                        candidate_start = _find_first_available_toestel_start(
+                            toestel_bezetting=toestel_bezetting,
+                            werkdag_str=werkdag_str,
+                            toestel=toestel,
+                            earliest_start=start_dt,
+                            duration_minutes=totale_duur,
+                        )
+
+                        if beste_start is None or candidate_start < beste_start or (
+                            candidate_start == beste_start and toestel < str(beste_toestel)
+                        ):
+                            beste_toestel = toestel
+                            beste_start = candidate_start
+
+                    gekozen_toestel = beste_toestel or GEEN_TOESTEL
+                    if beste_start is not None:
+                        start_dt = beste_start
+
                 eind_dt = start_dt + timedelta(minutes=totale_duur)
+
+                if gekozen_toestel != GEEN_TOESTEL and not _is_toestel_available(
+                    toestel_bezetting=toestel_bezetting,
+                    werkdag_str=werkdag_str,
+                    toestel=gekozen_toestel,
+                    start_dt=start_dt,
+                    eind_dt=eind_dt,
+                ):
+                    conflict = True
+                    conflict_reason = _append_conflict(
+                        conflict_reason,
+                        f"Toestel {gekozen_toestel} bezet tussen {start_dt.strftime('%H:%M')} en {eind_dt.strftime('%H:%M')}",
+                    )
 
                 planner_debug = _planner_debug_for_task(task, task_placement, conflict_notes)
 
@@ -2197,7 +2302,19 @@ def build_planning_df(
 
                 # Toestel blijft bezet tot einde totale duur, dus inclusief passieve tijd.
                 if gekozen_toestel != GEEN_TOESTEL:
-                    toestel_cursors[(werkdag_str, gekozen_toestel)] = eind_dt
+                    toestel_cursors[(werkdag_str, gekozen_toestel)] = max(
+                        toestel_cursors.get((werkdag_str, gekozen_toestel), datetime.combine(werkdag, time(0, 0))),
+                        eind_dt,
+                    )
+
+                    _reserve_toestel(
+                        toestel_bezetting=toestel_bezetting,
+                        werkdag_str=werkdag_str,
+                        toestel=gekozen_toestel,
+                        start_dt=start_dt,
+                        eind_dt=eind_dt,
+                        planning_id=task_row["Planning ID"],
+                    )
 
                 previous_task_end = eind_dt
 
