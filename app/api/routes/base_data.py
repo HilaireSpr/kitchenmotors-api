@@ -1,9 +1,16 @@
+from datetime import datetime
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.db import get_db_connection
 from app.schemas.planning import PlanningStartuurUpdateRequest
 from app.services.planning import update_startuur
+from app.services.post_werkuren_service import (
+    get_post_werkuren,
+    get_post_werkuren_voor_datum,
+    save_post_werkuren,
+)
 
 router = APIRouter()
 
@@ -36,6 +43,18 @@ class PostUpdate(BaseModel):
 class ToestelCreate(BaseModel):
     naam: str
 
+class PostWerkurenDag(BaseModel):
+    cyclus_week: int
+    weekdag: int
+    actief: bool = True
+    startuur: str | None = None
+    einduur: str | None = None
+
+
+class PostWerkurenUpdate(BaseModel):
+    cyclus_weken: int = 1
+    cyclus_startdatum: str | None = None
+    dagen: list[PostWerkurenDag] = []
 
 @router.get("/posten")
 def get_posten():
@@ -165,6 +184,39 @@ def delete_post(post_id: int):
     finally:
         conn.close()
 
+@router.get("/posten/{post_id}/werkuren")
+def read_post_werkuren(post_id: int):
+    conn = get_db_connection()
+    try:
+        return get_post_werkuren(conn, post_id)
+    finally:
+        conn.close()
+
+
+@router.put("/posten/{post_id}/werkuren")
+def update_post_werkuren(post_id: int, payload: PostWerkurenUpdate):
+    conn = get_db_connection()
+    try:
+        return save_post_werkuren(
+            conn=conn,
+            post_id=post_id,
+            cyclus_weken=payload.cyclus_weken,
+            cyclus_startdatum=payload.cyclus_startdatum,
+            dagen=[dag.model_dump() for dag in payload.dagen],
+        )
+    finally:
+        conn.close()
+
+
+@router.get("/posten/{post_id}/werkuren/voor-datum")
+def read_post_werkuren_voor_datum(post_id: int, datum: str):
+    parsed_datum = datetime.strptime(datum, "%Y-%m-%d").date()
+
+    conn = get_db_connection()
+    try:
+        return get_post_werkuren_voor_datum(conn, post_id, parsed_datum)
+    finally:
+        conn.close()
 
 @router.get("/toestellen")
 def get_toestellen():

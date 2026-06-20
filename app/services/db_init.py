@@ -109,6 +109,25 @@ def create_core_tables(conn: sqlite3.Connection) -> None:
     ensure_table(
         conn,
         """
+        CREATE TABLE IF NOT EXISTS post_werkuren (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id INTEGER NOT NULL,
+            cyclus_week INTEGER NOT NULL DEFAULT 1,
+            weekdag INTEGER NOT NULL,
+            actief INTEGER NOT NULL DEFAULT 1,
+            startuur TEXT,
+            einduur TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (post_id) REFERENCES posten(id),
+            UNIQUE (post_id, cyclus_week, weekdag)
+        )
+        """,
+    )
+
+    ensure_table(
+        conn,
+        """
         CREATE TABLE IF NOT EXISTS handelingen (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             recept_id INTEGER NOT NULL,
@@ -458,9 +477,23 @@ def migrate_posten_table(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "posten", "actief_vrijdag", "INTEGER DEFAULT 1")
     ensure_column(conn, "posten", "actief_zaterdag", "INTEGER DEFAULT 1")
     ensure_column(conn, "posten", "actief_zondag", "INTEGER DEFAULT 1")
+    ensure_column(conn, "posten", "post_werkuren_cyclus_weken", "INTEGER DEFAULT 1")
+    ensure_column(conn, "posten", "post_werkuren_cyclus_startdatum", "TEXT")
     ensure_column(conn, "posten", "created_at", "TEXT")
     ensure_column(conn, "posten", "updated_at", "TEXT")
 
+def migrate_post_werkuren_table(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "post_werkuren"):
+        return
+
+    ensure_column(conn, "post_werkuren", "post_id", "INTEGER")
+    ensure_column(conn, "post_werkuren", "cyclus_week", "INTEGER DEFAULT 1")
+    ensure_column(conn, "post_werkuren", "weekdag", "INTEGER")
+    ensure_column(conn, "post_werkuren", "actief", "INTEGER DEFAULT 1")
+    ensure_column(conn, "post_werkuren", "startuur", "TEXT")
+    ensure_column(conn, "post_werkuren", "einduur", "TEXT")
+    ensure_column(conn, "post_werkuren", "created_at", "TEXT")
+    ensure_column(conn, "post_werkuren", "updated_at", "TEXT")
 
 def migrate_planning_starturen_table(conn: sqlite3.Connection) -> None:
     if not _table_exists(conn, "planning_starturen"):
@@ -590,6 +623,7 @@ def backfill_posten_defaults(conn: sqlite3.Connection) -> None:
         "actief_zondag",
     ]:
         _safe_execute(conn, f"UPDATE posten SET {col} = 1 WHERE {col} IS NULL")
+        _safe_execute(conn, "UPDATE posten SET post_werkuren_cyclus_weken = 1 WHERE post_werkuren_cyclus_weken IS NULL OR post_werkuren_cyclus_weken NOT IN (1, 2, 3, 4)")
 
 
 def backfill_planning_runs_defaults(conn: sqlite3.Connection) -> None:
@@ -686,6 +720,12 @@ def create_indexes(conn: sqlite3.Connection) -> None:
 
     ensure_index(conn, "idx_posten_naam", "CREATE INDEX idx_posten_naam ON posten(naam)")
 
+    ensure_index(
+        conn,
+        "idx_post_werkuren_lookup",
+        "CREATE INDEX idx_post_werkuren_lookup ON post_werkuren(post_id, cyclus_week, weekdag)",
+    )
+
     ensure_index(conn, "idx_planning_starturen_pair", "CREATE INDEX idx_planning_starturen_pair ON planning_starturen(werkdag, post)")
 
     ensure_index(conn, "idx_planning_runs_actief", "CREATE INDEX idx_planning_runs_actief ON planning_runs(actief)")
@@ -709,6 +749,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     migrate_menu_table(conn)
     migrate_menu_periodes_table(conn)
     migrate_posten_table(conn)
+    migrate_post_werkuren_table(conn)
     migrate_planning_starturen_table(conn)
     migrate_planning_runs_table(conn)
     migrate_planning_saved_table(conn)
@@ -729,6 +770,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         "menu",
         "menu_periodes",
         "posten",
+        "post_werkuren",
         "planning_runs",
         "planning_saved",
         "planning_overrides",
