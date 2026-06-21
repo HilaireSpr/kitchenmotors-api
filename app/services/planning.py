@@ -591,8 +591,8 @@ def _get_menu_items(conn, menu_groep: str | None = None):
             FROM menu m
             JOIN recepten r ON r.id = m.recept_id
             WHERE COALESCE(m.status, 'active') = 'active'
-              AND COALESCE(m.menu_groep, r.menu_groep) = ?
-            ORDER BY COALESCE(m.menu_groep, r.menu_groep), r.code, r.naam
+                AND m.menu_groep = ?
+            ORDER BY m.menu_groep, r.code, r.naam
             """,
             (menu_groep,),
         ).fetchall()
