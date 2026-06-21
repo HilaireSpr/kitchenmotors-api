@@ -267,6 +267,7 @@ def create_core_tables(conn: sqlite3.Connection) -> None:
             actief_vrijdag INTEGER DEFAULT 1,
             actief_zaterdag INTEGER DEFAULT 1,
             actief_zondag INTEGER DEFAULT 1,
+            planning_fase INTEGER DEFAULT 100,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
@@ -479,6 +480,7 @@ def migrate_posten_table(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "posten", "actief_zondag", "INTEGER DEFAULT 1")
     ensure_column(conn, "posten", "post_werkuren_cyclus_weken", "INTEGER DEFAULT 1")
     ensure_column(conn, "posten", "post_werkuren_cyclus_startdatum", "TEXT")
+    ensure_column(conn, "posten", "planning_fase", "INTEGER DEFAULT 100")
     ensure_column(conn, "posten", "created_at", "TEXT")
     ensure_column(conn, "posten", "updated_at", "TEXT")
 
@@ -623,7 +625,8 @@ def backfill_posten_defaults(conn: sqlite3.Connection) -> None:
         "actief_zondag",
     ]:
         _safe_execute(conn, f"UPDATE posten SET {col} = 1 WHERE {col} IS NULL")
-        _safe_execute(conn, "UPDATE posten SET post_werkuren_cyclus_weken = 1 WHERE post_werkuren_cyclus_weken IS NULL OR post_werkuren_cyclus_weken NOT IN (1, 2, 3, 4)")
+    _safe_execute(conn, "UPDATE posten SET post_werkuren_cyclus_weken = 1 WHERE post_werkuren_cyclus_weken IS NULL OR post_werkuren_cyclus_weken NOT IN (1, 2, 3, 4)")
+    _safe_execute(conn, "UPDATE posten SET planning_fase = 100 WHERE planning_fase IS NULL OR planning_fase <= 0")
 
 
 def backfill_planning_runs_defaults(conn: sqlite3.Connection) -> None:

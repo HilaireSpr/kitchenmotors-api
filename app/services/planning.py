@@ -242,6 +242,35 @@ def get_post_capaciteiten(conn) -> dict[str, int]:
 
     return result
 
+def get_post_planning_fases(conn) -> dict[str, int]:
+    rows = conn.execute(
+        """
+        SELECT
+            naam,
+            COALESCE(planning_fase, 100) AS planning_fase
+        FROM posten
+        WHERE COALESCE(actief, 1) = 1
+        """
+    ).fetchall()
+
+    result: dict[str, int] = {}
+
+    for row in rows:
+        naam = str(row["naam"] or "").strip()
+        if not naam:
+            continue
+
+        try:
+            fase = int(row["planning_fase"] or 100)
+        except Exception:
+            fase = 100
+
+        if fase <= 0:
+            fase = 100
+
+        result[naam] = fase
+
+    return result
 
 def get_capacity_status(totale_minuten: int, capaciteit_minuten: int) -> str:
     if capaciteit_minuten <= 0:
@@ -1547,6 +1576,7 @@ PLANNING_COLUMNS = [
     "Pakket code",
     "Pakket volgorde",
     "Pakket status",
+    "Planning fase",
 ]
 
 
@@ -1581,6 +1611,19 @@ def _calculate_active_day_post_load(planning_rows: list[dict], werkdag_str: str,
             total += int(row.get("Actieve tijd", 0) or 0)
     return total
 
+def _get_package_planning_fase(package: dict, post_planning_fases: dict[str, int]) -> int:
+    fases: list[int] = []
+
+    for task in package.get("tasks", []):
+        standaard_post = str(task.get("standaard_post") or GEEN_POST).strip()
+
+        if standaard_post and standaard_post != GEEN_POST:
+            fases.append(int(post_planning_fases.get(standaard_post, 100) or 100))
+
+    if not fases:
+        return 100
+
+    return min(fases)
 
 def _build_package_id(menu_item, package_code: str) -> str:
     return (
@@ -1654,7 +1697,14 @@ def _choose_task_post_from_package(task: dict, package_post: str, alle_posten: l
     return task["standaard_post"], True
 
 
-def _build_packages_for_menu_item(conn, menu_item, handelingen, override_map: dict, alle_posten: list[str]) -> list[dict]:
+def _build_packages_for_menu_item(
+    conn,
+    menu_item,
+    handelingen,
+    override_map: dict,
+    alle_posten: list[str],
+    post_planning_fases: dict[str, int],
+) -> list[dict]:
     packages_by_code: dict[str, dict] = {}
 
     for h in handelingen:
@@ -1674,6 +1724,7 @@ def _build_packages_for_menu_item(conn, menu_item, handelingen, override_map: di
     packages = list(packages_by_code.values())
 
     for package in packages:
+        package["planning_fase"] = _get_package_planning_fase(package, post_planning_fases)
         package["tasks"] = sorted(
             package["tasks"],
             key=lambda t: (
@@ -1686,6 +1737,7 @@ def _build_packages_for_menu_item(conn, menu_item, handelingen, override_map: di
 
     packages.sort(
         key=lambda p: (
+            int(p.get("planning_fase", 100) or 100),
             min(t["preferred_offset"] for t in p["tasks"]),
             p["package_code"],
         )
@@ -2054,6 +2106,7 @@ def build_planning_df(
     starturen_map = get_planning_starturen(conn)
     alle_toestellen = get_toestellen(conn)
     post_capaciteiten = get_post_capaciteiten(conn)
+    post_planning_fases = get_post_planning_fases(conn)
     post_weekdag_actief_map = get_post_weekdag_actief_map(conn)
     alle_posten = sorted([post for post in post_capaciteiten.keys() if post and post != GEEN_POST])
     if not alle_posten:
@@ -2109,6 +2162,7 @@ def build_planning_df(
             handelingen=handelingen,
             override_map=planning_override_map,
             alle_posten=alle_posten,
+            post_planning_fases=post_planning_fases,
         )
 
         for package in packages:
@@ -2284,6 +2338,12 @@ def build_planning_df(
                 task_row["Pakket code"] = package["package_code"]
                 task_row["Pakket volgorde"] = index
                 task_row["Pakket status"] = package_status
+                task_row["Planning fase"] = package.get("planning_fase", 100)
+
+                task_row["Planner reden"] = (
+                    f"{task_row['Planner reden']} | "
+                    f"planningsfase {package.get('planning_fase', 100)}"
+                )
 
                 if str(row_get(h, "code", "") or "").startswith("GG14"):
                     task_row["Planner reden"] = (

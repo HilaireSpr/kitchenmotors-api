@@ -19,6 +19,7 @@ class PostCreate(BaseModel):
     kleur: str = "#dbeafe"
     capaciteit_minuten: int = 480
     startuur: str = "08:00"
+    planning_fase: int = 100
     actief_maandag: int = 1
     actief_dinsdag: int = 1
     actief_woensdag: int = 1
@@ -32,6 +33,7 @@ class PostUpdate(BaseModel):
     kleur: str = "#dbeafe"
     capaciteit_minuten: int = 480
     startuur: str = "08:00"
+    planning_fase: int = 100
     actief_maandag: int = 1
     actief_dinsdag: int = 1
     actief_woensdag: int = 1
@@ -68,6 +70,7 @@ def get_posten():
                 COALESCE(kleur, '#dbeafe') AS kleur,
                 COALESCE(capaciteit_minuten, 480) AS capaciteit_minuten,
                 COALESCE(startuur, '08:00') AS startuur,
+                COALESCE(planning_fase, 100) AS planning_fase,
                 COALESCE(actief_maandag, 1) AS actief_maandag,
                 COALESCE(actief_dinsdag, 1) AS actief_dinsdag,
                 COALESCE(actief_woensdag, 1) AS actief_woensdag,
@@ -96,6 +99,7 @@ def create_post(post: PostCreate):
                 kleur,
                 capaciteit_minuten,
                 startuur,
+                planning_fase,
                 actief_maandag,
                 actief_dinsdag,
                 actief_woensdag,
@@ -104,13 +108,14 @@ def create_post(post: PostCreate):
                 actief_zaterdag,
                 actief_zondag
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 post.naam,
                 post.kleur,
                 post.capaciteit_minuten,
                 post.startuur,
+                post.planning_fase,
                 post.actief_maandag,
                 post.actief_dinsdag,
                 post.actief_woensdag,
@@ -138,6 +143,7 @@ def update_post(post_id: int, post: PostUpdate):
                 kleur = ?,
                 capaciteit_minuten = ?,
                 startuur = ?,
+                planning_fase = ?,
                 actief_maandag = ?,
                 actief_dinsdag = ?,
                 actief_woensdag = ?,
@@ -152,6 +158,7 @@ def update_post(post_id: int, post: PostUpdate):
                 post.kleur,
                 post.capaciteit_minuten,
                 post.startuur,
+                post.planning_fase,
                 post.actief_maandag,
                 post.actief_dinsdag,
                 post.actief_woensdag,
