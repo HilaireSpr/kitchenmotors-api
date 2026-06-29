@@ -24,6 +24,10 @@ OPTIONAL_DEFAULTS = {
     "stap_volgorde": None,
     "stap_tijd": 0,
     "is_vaste_taak": 0,
+    "voorkeurpost": "",
+    "alternatief_1": "",
+    "alternatief_2": "",
+    "alternatief_3": "",
 }
 
 
@@ -175,6 +179,25 @@ def build_incoming_recipe_maps(df: pd.DataFrame):
             }
 
         if handeling_code not in incoming_by_recept[recept_code]["handelingen"]:
+            voorkeurpost = normalize_post(
+                row.get("voorkeurpost") or row.get("post")
+            )
+
+            alternatieven = []
+
+            for kolom in ["alternatief_1", "alternatief_2", "alternatief_3"]:
+                waarde = normalize_post(row.get(kolom))
+                if waarde and waarde != "-" and waarde != voorkeurpost and waarde not in alternatieven:
+                    alternatieven.append(waarde)
+
+            alternatieve_posten = ",".join(alternatieven)
+
+            post_policy = (
+                "flexible"
+                if alternatieve_posten
+                else "fixed"
+            )
+
             incoming_by_recept[recept_code]["handelingen"][handeling_code] = {
                 "handeling_code": handeling_code,
                 "handeling_naam": handeling_naam,
@@ -182,7 +205,9 @@ def build_incoming_recipe_maps(df: pd.DataFrame):
                 "dag_offset_min": dag_offset_min,
                 "dag_offset_max": dag_offset_max,
                 "volgorde_handeling": volgorde_handeling,
-                "post": normalize_post(row["post"]),
+                "post": voorkeurpost,
+                "alternatieve_posten": alternatieve_posten,
+                "post_policy": post_policy,
                 "toestel": normalize_toestel(row["toestel"]),
                 "passieve_tijd": safe_int(row["passieve_tijd"], 0),
                 "is_vaste_taak": normalize_bool(row["is_vaste_taak"]),
@@ -307,11 +332,13 @@ def insert_handeling(conn, recept_id: int, handeling: dict):
             max_offset_dagen,
             sort_order,
             post,
+            alternatieve_posten,
+            post_policy,
             toestel,
             passieve_tijd,
             is_vaste_taak
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             recept_id,
@@ -322,10 +349,12 @@ def insert_handeling(conn, recept_id: int, handeling: dict):
             handeling["dag_offset_max"],
             handeling["volgorde_handeling"],
             handeling["post"],
+            handeling["alternatieve_posten"],
+            handeling["post_policy"],
             handeling["toestel"],
             handeling["passieve_tijd"],
             handeling["is_vaste_taak"],
-        ),
+        )
     )
 
     return cur.lastrowid
