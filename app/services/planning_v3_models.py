@@ -81,6 +81,8 @@ class ExecutionLaneV3:
 
     packages: List[WorkPackageV3] = field(default_factory=list)
 
+    blocks: List[ExecutionBlockV3] = field(default_factory=list)
+
 
 @dataclass
 class PlannerDecisionV3:
@@ -88,6 +90,37 @@ class PlannerDecisionV3:
     title: str
     explanation: str
 
+@dataclass
+class ExecutionBlockV3:
+    """
+    Eén bezet of gereserveerd tijdsblok op een Execution Lane.
+    """
+
+    start: datetime
+    einde: datetime
+
+    block_type: str
+    # WORK
+    # BREAK
+    # PASSIVE
+    # RESERVED
+
+    package_id: Optional[str] = None
+
+    toestel: Optional[str] = None
+
+    locked: bool = False
+
+@dataclass
+class FreeBlockV3:
+    """
+    Eén vrij tijdsblok op een Execution Lane.
+    """
+
+    start: datetime
+    einde: datetime
+
+    duur_minuten: int
 
 @dataclass
 class ScheduledWorkPackageV3:
