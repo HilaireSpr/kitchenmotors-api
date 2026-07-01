@@ -15,7 +15,7 @@ Niet verantwoordelijk voor:
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -27,6 +27,7 @@ from app.services.planning_v3_models import (
     PlanningContextV3,
     ScheduledWorkPackageV3,
     WorkPackageV3,
+    ExecutionLaneV3,
 )
 
 from app.services.planning_v3_rules import (
@@ -135,6 +136,8 @@ class BlockChoiceScore:
     remaining_minutes: int = 0
     projected_load_pct: float = 0.0
     capacity_penalty: int = 0
+    block_score: int = 0
+    lane_score: int = 0
 
 @dataclass
 class LaneScore:
@@ -152,6 +155,29 @@ class LaneScore:
 
     reason: str
 
+@dataclass
+class PreferenceScore:
+    """
+    Score gebaseerd op planner-voorkeuren.
+
+    Heeft niets te maken met capaciteit,
+    maar met KitchenMotors business rules.
+    """
+
+    score: int
+
+    reason: str
+
+@dataclass
+class CandidateLaneV3:
+    """
+    Een mogelijke Execution Lane voor een werkpakket.
+    """
+
+    lane: ExecutionLaneV3
+
+    score: LaneScore
+
 def score_lane(
     lane,
     required_minutes: int,
@@ -161,12 +187,6 @@ def score_lane(
 
     Sprint 4C:
     Alleen capaciteit.
-
-    Later komen erbij:
-    - bottlenecks
-    - forecast
-    - alternatieve posten
-    - vaste posten
     """
 
     projected_minutes = lane.ingeplande_minuten + required_minutes
@@ -195,53 +215,140 @@ def score_lane(
         ),
     )
 
+def score_preference(
+    lane,
+    package,
+) -> PreferenceScore:
+    """
+    Sprint 4E.
+
+    Voorlopig nog neutraal.
+
+    Later:
+    - preferred post
+    - fixed post
+    - alternatieve posten
+    - post_policy
+    - overrides
+    """
+
+    return PreferenceScore(
+        score=0,
+        reason="No preference rules applied.",
+    )
+
+def get_possible_posts_for_package(
+    package: WorkPackageV3,
+) -> List[str]:
+    """
+    Geeft mogelijke posten voor een werkpakket.
+
+    Sprint 4D.2:
+    Tijdelijke testlogica.
+
+    Later vervangen door:
+    - post_policy
+    - alternatieve_posten
+    - vaste posten
+    - toestellen
+    """
+
+    if package.productiestroom == "PAT":
+        return ["PAT", "FOOD", "REF"]
+
+    if package.productiestroom == "FOOD":
+        return ["FOOD", "PAT", "REF"]
+
+    if package.productiestroom == "REF":
+        return ["REF", "FOOD", "PAT"]
+
+    if package.productiestroom == "SOEP":
+        return ["SOEP", "FOOD", "PAT"]
+
+    return [package.productiestroom]
+
+def choose_best_lane(
+    candidate_lanes: List[CandidateLaneV3],
+) -> Optional[CandidateLaneV3]:
+    """
+    Kiest de beste execution lane.
+
+    Sprint 4D:
+    Voorlopig wint de lane met de laagste lane score.
+    """
+
+    if not candidate_lanes:
+        return None
+
+    return min(
+        candidate_lanes,
+        key=lambda candidate: candidate.score.score,
+    )
+
+def find_candidate_lanes(
+    execution_lanes: Dict[tuple[str, date], ExecutionLaneV3],
+    package: WorkPackageV3,
+) -> List[CandidateLaneV3]:
+    """
+    Geeft alle mogelijke lanes terug.
+
+    Sprint 4D.2:
+    Tijdelijk meerdere kandidaatposten op basis van productiestroom.
+
+    Later:
+    - alternatieve posten uit handeling
+    - post_policy
+    - vaste posten
+    - toestellen
+    """
+
+    duration = estimate_package_duration_minutes(package)
+
+    candidate_lanes: List[CandidateLaneV3] = []
+
+    for post in get_possible_posts_for_package(package):
+        key = (
+            post,
+            package.werkdag,
+        )
+
+        lane = execution_lanes.get(key)
+
+        if lane is None:
+            continue
+
+        candidate_lanes.append(
+            CandidateLaneV3(
+                lane=lane,
+                score=score_lane(
+                    lane=lane,
+                    required_minutes=duration,
+                ),
+            )
+        )
+
+    return candidate_lanes
+
 def score_candidate_block(
     block: FreeBlockV3,
     required_minutes: int,
-    lane,
 ) -> BlockChoiceScore:
     """
-    Scoort een kandidaatblok.
+    Scoort alleen het vrije blok.
 
-    RULE_080:
-    Vermijd overbelaste lanes.
-
-    Score-opbouw:
-    - resttijd in het blok
-    - extra penalty wanneer lane na planning boven 80% komt
-    - zware penalty wanneer lane na planning boven 100% komt
+    Sprint 4C:
+    Best-fit principe:
+    hoe minder resttijd, hoe beter.
     """
 
     remaining_minutes = block.duur_minuten - required_minutes
 
-    projected_minutes = lane.ingeplande_minuten + required_minutes
-
-    projected_load_pct = (
-        projected_minutes / lane.capaciteit_minuten * 100
-        if lane.capaciteit_minuten
-        else 0
-    )
-
-    capacity_penalty = 0
-
-    if projected_load_pct > 100:
-        capacity_penalty = 1000 + int(projected_load_pct - 100)
-    elif projected_load_pct > 80:
-        capacity_penalty = 100 + int(projected_load_pct - 80)
-
-    score = remaining_minutes + capacity_penalty
-
     return BlockChoiceScore(
         block=block,
-        score=score,
-        reason=(
-            f"Best-fit: {remaining_minutes} minuten resttijd. "
-            f"Projected load: {projected_load_pct:.1f}%. "
-            f"Capacity penalty: {capacity_penalty}."
-        ),
+        score=remaining_minutes,
+        block_score=remaining_minutes,
         remaining_minutes=remaining_minutes,
-        projected_load_pct=round(projected_load_pct, 1),
-        capacity_penalty=capacity_penalty,
+        reason=f"Best-fit: {remaining_minutes} minuten resttijd.",
     )
 
 def choose_best_block(
@@ -252,21 +359,44 @@ def choose_best_block(
     """
     Kiest het beste vrije blok.
 
-    Voorlopig:
-    - laagste resttijd wint
+    Final score =
+    lane score + block score
     """
 
     if not candidate_blocks:
         return None
 
-    scores = [
-        score_candidate_block(
-        block=block,
-        required_minutes=required_minutes,
+    lane_score = score_lane(
         lane=lane,
+        required_minutes=required_minutes,
     )
-        for block in candidate_blocks
-    ]
+
+    scores: List[BlockChoiceScore] = []
+
+    for block in candidate_blocks:
+        block_score = score_candidate_block(
+            block=block,
+            required_minutes=required_minutes,
+        )
+
+        final_score = lane_score.score + block_score.score
+
+        scores.append(
+            BlockChoiceScore(
+                block=block,
+                score=final_score,
+                reason=(
+                    f"{block_score.reason} "
+                    f"{lane_score.reason}. "
+                    f"Final score: {final_score}."
+                ),
+                remaining_minutes=block_score.remaining_minutes,
+                projected_load_pct=lane_score.load_pct,
+                capacity_penalty=lane_score.capacity_penalty,
+                block_score=block_score.score,
+                lane_score=lane_score.score,
+            )
+        )
 
     return min(scores, key=lambda item: item.score)
 
@@ -288,26 +418,58 @@ def schedule_work_packages(
     scheduled_from_free_blocks = 0
     scheduled_from_fallback = 0
     scheduled_with_multiple_candidates = 0
+
     block_choice_debug: List[Dict[str, Any]] = []
+
+    candidate_lane_debug: List[Dict[str, Any]] = []
 
     for package in work_packages:
 
-        post = package.preferred_post or package.productiestroom or "ONBEKEND"
+        candidate_lanes = find_candidate_lanes(
+            execution_lanes=execution_lanes,
+            package=package,
+        )
 
-        lane_key = (post, package.werkdag)
+        chosen_lane = choose_best_lane(candidate_lanes)
 
-        lane = execution_lanes.get(lane_key)
-
-        if lane is None:
+        if chosen_lane is None:
             missing_lanes.append(
                 {
                     "package_id": package.package_id,
-                    "post": post,
+                    "post": package.productiestroom,
                     "werkdag": package.werkdag.isoformat(),
                     "items": len(package.items),
                 }
             )
             continue
+
+        lane = chosen_lane.lane
+
+        candidate_lane_debug.append(
+            {
+                "package_id": package.package_id,
+                "productiestroom": package.productiestroom,
+                "werkdag": package.werkdag.isoformat(),
+                "candidate_count": len(candidate_lanes),
+                "chosen_post": chosen_lane.lane.post if chosen_lane else None,
+                "chosen_score": chosen_lane.score.score if chosen_lane else None,
+                "chosen_load_pct": (
+                    chosen_lane.score.load_pct
+                    if chosen_lane
+                    else None
+                ),
+                "candidates": [
+                    {
+                        "post": candidate.lane.post,
+                        "load_pct": candidate.score.load_pct,
+                        "score": candidate.score.score,
+                        "capacity_penalty": candidate.score.capacity_penalty,
+                        "reason": candidate.score.reason,
+                    }
+                    for candidate in candidate_lanes
+                ],
+            }
+        )
 
         duration_minutes = estimate_package_duration_minutes(package)
 
@@ -338,6 +500,8 @@ def schedule_work_packages(
                     "chosen_end": chosen_block.einde.strftime("%H:%M"),
                     "chosen_block_minutes": chosen_block.duur_minuten,
                     "score": chosen_score.score,
+                    "block_score": chosen_score.block_score,
+                    "lane_score": chosen_score.lane_score,
                     "remaining_minutes": chosen_score.remaining_minutes,
                     "projected_load_pct": chosen_score.projected_load_pct,
                     "capacity_penalty": chosen_score.capacity_penalty,
@@ -431,6 +595,7 @@ def schedule_work_packages(
     context.debug["scheduled_from_fallback"] = scheduled_from_fallback
     context.debug["scheduled_with_multiple_candidates"] = scheduled_with_multiple_candidates
     context.debug["block_choice_first_20"] = block_choice_debug[:20]
+    context.debug["candidate_lanes_first_20"] = candidate_lane_debug[:20]
     context.debug["missing_lanes_count"] = len(missing_lanes)
     context.debug["missing_lanes_first_20"] = missing_lanes[:20]
 
@@ -481,5 +646,31 @@ def schedule_work_packages(
             key=lambda item: (item.werkdag, item.post),
         )[:20]
     ]
+    overloaded_lanes = []
+
+    for lane in execution_lanes.values():
+        if lane.belasting_pct > 100:
+            overloaded_lanes.append(
+                {
+                    "post": lane.post,
+                    "werkdag": lane.werkdag.isoformat(),
+                    "belasting_pct": lane.belasting_pct,
+                    "ingeplande_minuten": lane.ingeplande_minuten,
+                    "capaciteit_minuten": lane.capaciteit_minuten,
+                    "overload_minutes": max(
+                        0,
+                        lane.ingeplande_minuten - lane.capaciteit_minuten,
+                    ),
+                    "packages": len(lane.packages),
+                    "blocks": len(lane.blocks),
+                }
+            )
+
+    context.debug["overloaded_lanes_count"] = len(overloaded_lanes)
+    context.debug["overloaded_lanes_first_20"] = sorted(
+        overloaded_lanes,
+        key=lambda item: item["belasting_pct"],
+        reverse=True,
+    )[:20]
 
     return scheduled

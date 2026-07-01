@@ -19,10 +19,6 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from app.services.planning_v3_models import (
-    PlanningContextV3,
-)
-
 from app.services.planning_v3_scheduler import schedule_work_packages
 from app.services.planning_v3_sequence import sequence_work_packages
 from app.services.planning_v3_context import (
